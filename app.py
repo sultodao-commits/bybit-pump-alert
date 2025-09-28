@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Volatility Anomaly Alerts → Telegram (Scalingo)
-- Источник данных: Bybit Spot через ccxt
-- Мониторинг таймфреймов: 5m и 15m
-- Алёрты: Telegram Bot API
-- Де-дубль: sqlite (по паре/таймфрейму/времени свечи)
+Bybit Volatility Anomaly Alerts → Telegram (Scalingo, c фильтром ликвидности)
+- Источник: Bybit Spot (ccxt)
+- Таймфреймы: 5m и 15m
+- Алерты: Telegram Bot API
+- Де-дубль: sqlite (symbol, timeframe, candle_ts)
+- Улучшение: фильтр по 24h объёму (USDT) и минимальной цене
 """
 
 import os
@@ -13,7 +14,7 @@ import time
 import sqlite3
 import traceback
 from datetime import datetime, timezone
-from typing import List, Dict, Tuple
+from typing import List, Tuple
 
 import requests
 import ccxt
@@ -23,34 +24,33 @@ from dotenv import load_dotenv
 
 # ------------------------- Конфигурация -------------------------
 
-# На Scalingo переменные приходят из окружения; dotenv не обязателен, но не мешает.
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# Настраиваемые параметры (есть дефолты)
-POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))   # период цикла мониторинга
-TOP_MARKETS       = int(os.getenv("TOP_MARKETS", "60"))         # сколько топ USDT-пар мониторить
-THRESH_5M_PCT     = float(os.getenv("THRESH_5M_PCT", "6"))      # порог пампа за 1 свечу 5m
-THRESH_15M_PCT    = float(os.getenv("THRESH_15M_PCT", "12"))    # порог пампа за 1 свечу 15m
+POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
+TOP_MARKETS       = int(os.getenv("TOP_MARKETS", "60"))
+THRESH_5M_PCT     = float(os.getenv("THRESH_5M_PCT", "6"))
+THRESH_15M_PCT    = float(os.getenv("THRESH_15M_PCT", "12"))
 
-# Проверка обязательных переменных
+# Новые параметры ликвидности
+MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "500000"))
+MIN_LAST_PRICE_USDT       = float(os.getenv("MIN_LAST_PRICE_USDT", "0.002"))
+
 assert TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, "Нужно указать TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID"
 
-# Внутренние параметры
 STATE_DB   = os.path.join(os.path.dirname(__file__), "state.db")
 TIMEFRAMES = [("5m", THRESH_5M_PCT), ("15m", THRESH_15M_PCT)]
-
 
 # ------------------------- Утилиты -------------------------
 
 def ts_to_iso(ts_ms: int) -> str:
-    """Милисекунды → ISO в UTC"""
+    """мс → ISO (UTC)"""
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def send_telegram(text: str) -> None:
-    """Отправка сообщения в Telegram"""
+    """Отправить сообщение в Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -61,12 +61,11 @@ def send_telegram(text: str) -> None:
     try:
         r = requests.post(url, json=payload, timeout=12)
         if r.status_code != 200:
-            print(f"[TG] Ошибка отправки: {r.status_code} {r.text}")
+            print(f"[TG] HTTP {r.status_code}: {r.text}")
     except Exception as e:
-        print(f"[TG] Исключение при отправке: {e}")
+        print(f"[TG] Исключение: {e}")
 
 def init_db() -> None:
-    """Создаём таблицу для де-дублирования сигналов"""
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
     cur.execute("""
@@ -83,10 +82,7 @@ def init_db() -> None:
 def was_alerted(symbol: str, timeframe: str, candle_ts: int) -> bool:
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
-    cur.execute(
-        "SELECT 1 FROM alerts WHERE symbol=? AND timeframe=? AND candle_ts=?",
-        (symbol, timeframe, candle_ts),
-    )
+    cur.execute("SELECT 1 FROM alerts WHERE symbol=? AND timeframe=? AND candle_ts=?", (symbol, timeframe, candle_ts))
     row = cur.fetchone()
     con.close()
     return row is not None
@@ -94,31 +90,30 @@ def was_alerted(symbol: str, timeframe: str, candle_ts: int) -> bool:
 def save_alert(symbol: str, timeframe: str, candle_ts: int) -> None:
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
-    cur.execute(
-        "INSERT OR IGNORE INTO alerts(symbol, timeframe, candle_ts) VALUES(?,?,?)",
-        (symbol, timeframe, candle_ts),
-    )
+    cur.execute("INSERT OR IGNORE INTO alerts(symbol, timeframe, candle_ts) VALUES(?,?,?)", (symbol, timeframe, candle_ts))
     con.commit()
     con.close()
 
-
-# ------------------------- Работа с Bybit через ccxt -------------------------
+# ------------------------- Bybit (ccxt) -------------------------
 
 def build_exchange() -> ccxt.bybit:
-    """Инициализация Bybit (спот)"""
-    ex = ccxt.bybit({
+    return ccxt.bybit({
         "enableRateLimit": True,
         "timeout": 20000,
         "options": {"defaultType": "spot"},
     })
-    return ex
 
-def pick_spot_usdt_symbols(ex: ccxt.Exchange, top_n: int) -> List[str]:
+def pick_spot_usdt_symbols_with_liquidity(ex: ccxt.Exchange, top_n: int,
+                                          min_qv_usdt: float,
+                                          min_last_price: float) -> List[str]:
     """
-    Берём активные SPOT пары c котировкой USDT, исключаем 3L/3S/UP/DOWN и стейблы как base.
-    Сортируем по 24h объёму (quoteVolume/baseVolume) и берём top_n.
+    Выбираем SPOT/USDT пары, исключаем UP/DOWN/3L/3S/4L/4S и стейблы как base.
+    Фильтруем по 24h quoteVolume >= min_qv_usdt и last >= min_last_price.
+    Сортируем по quoteVolume и берём top_n.
     """
     markets = ex.load_markets(reload=True)
+    tickers = ex.fetch_tickers(params={"type": "spot"})
+
     candidates = []
     for sym, m in markets.items():
         try:
@@ -131,36 +126,38 @@ def pick_spot_usdt_symbols(ex: ccxt.Exchange, top_n: int) -> List[str]:
                 continue
             if base in ["USDT", "USDC", "FDUSD", "DAI"]:
                 continue
-            candidates.append(sym)
+
+            t = tickers.get(sym, {})
+            qv = float(t.get("quoteVolume") or t.get("baseVolume") or 0.0)
+            last = float(t.get("last") or t.get("close") or 0.0)
+
+            if qv < min_qv_usdt:
+                continue
+            if last < min_last_price:
+                continue
+
+            candidates.append((sym, qv))
         except Exception:
             continue
 
-    tickers = ex.fetch_tickers(params={"type": "spot"})
-    rows = []
-    for sym in candidates:
-        t = tickers.get(sym, {})
-        qv = t.get("quoteVolume") or t.get("baseVolume") or 0.0
-        rows.append((sym, float(qv)))
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return [sym for sym, _ in rows[:max(10, top_n)]]
-
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return [sym for sym, _ in candidates[:max(10, top_n)]]
 
 # ------------------------- Аналитика свечи -------------------------
 
 def last_bar_change_pct(ohlcv: list) -> Tuple[float, int]:
     """
-    Возвращает (% изменения последней свечи к предыдущей, timestamp последней свечи)
-    ohlcv: список [ts, open, high, low, close, volume]
+    Возврат: (изменение последней свечи к предыдущей, %, ts последней свечи)
+    ohlcv: [ts, open, high, low, close, volume]
     """
     if not ohlcv or len(ohlcv) < 2:
         return 0.0, 0
-    prev = ohlcv[-2][4]
-    last = ohlcv[-1][4]
+    prev = float(ohlcv[-2][4])
+    last = float(ohlcv[-1][4])
     ts   = int(ohlcv[-1][0])
     if prev == 0:
         return 0.0, ts
     return (last / prev - 1.0) * 100.0, ts
-
 
 # ------------------------- Основной цикл -------------------------
 
@@ -168,25 +165,36 @@ def main():
     print("Инициализация...")
     init_db()
 
-    # Пингуем в Telegram при старте
     try:
-        send_telegram("✅ Бот запущен: мониторинг пампов на Bybit (5m/15m).")
+        send_telegram(
+            "✅ Бот запущен (Scalingo).\n"
+            f"Фильтры: объём ≥ {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT, цена ≥ {MIN_LAST_PRICE_USDT} USDT.\n"
+            f"Пороги: 5m ≥ {THRESH_5M_PCT}%, 15m ≥ {THRESH_15M_PCT}%.".replace(",", " ")
+        )
     except Exception as e:
-        print(f"[BOOT PING] Ошибка отправки: {e}")
+        print(f"[BOOT PING] Ошибка TG: {e}")
 
     ex = build_exchange()
 
-    # Подбираем список пар
+    # Подбираем пары с фильтром ликвидности
+    symbols = []
     try:
-        symbols = pick_spot_usdt_symbols(ex, TOP_MARKETS)
+        symbols = pick_spot_usdt_symbols_with_liquidity(
+            ex, TOP_MARKETS,
+            MIN_24H_QUOTE_VOLUME_USDT,
+            MIN_LAST_PRICE_USDT
+        )
+        print(f"К мониторингу отобрано пар: {len(symbols)}")
+        if symbols[:10]:
+            print(f"Первые 10: {symbols[:10]}")
+        # Пошлём краткий отчёт о количестве пар
+        try:
+            send_telegram(f"📊 К мониторингу отобрано пар: <b>{len(symbols)}</b> (по фильтру ликвидности).")
+        except Exception as e:
+            print(f"[TG] Ошибка отчёта: {e}")
     except Exception as e:
-        symbols = []
         print(f"[SYMBOLS] Ошибка подбора пар: {e}")
         traceback.print_exc()
-
-    print(f"Всего пар к мониторингу: {len(symbols)}")
-    if symbols[:10]:
-        print(f"Первые 10: {symbols[:10]}")
 
     while True:
         cycle_start = time.time()
@@ -200,15 +208,14 @@ def main():
                             continue
                         if chg_pct >= threshold and not was_alerted(symbol, timeframe, candle_ts):
                             msg = (
-                                f"🚨 <b>Памп обнаружен</b> ({timeframe})\n"
+                                f"🚨 <b>Памп</b> ({timeframe})\n"
                                 f"Монета: <b>{symbol}</b>\n"
                                 f"Рост последней свечи: <b>{chg_pct:.2f}%</b>\n"
                                 f"Свеча: {ts_to_iso(candle_ts)}\n\n"
-                                f"<i>Не финсовет. Проверьте ликвидность и риски.</i>"
+                                f"<i>Не финсовет. Проверяйте ликвидность и риски.</i>"
                             )
                             send_telegram(msg)
                             save_alert(symbol, timeframe, candle_ts)
-                            # маленькая пауза, щадим API
                             time.sleep(0.15)
                     except ccxt.RateLimitExceeded as e:
                         print(f"[{symbol} {timeframe}] Rate limit: {e}. Пауза 3с")
@@ -221,11 +228,8 @@ def main():
             print(f"[CYCLE] Ошибка верхнего уровня: {e}")
             traceback.print_exc()
 
-        # Поддерживаем период опроса
         elapsed = time.time() - cycle_start
-        sleep_left = max(1.0, POLL_INTERVAL_SEC - elapsed)
-        time.sleep(sleep_left)
-
+        time.sleep(max(1.0, POLL_INTERVAL_SEC - elapsed))
 
 if __name__ == "__main__":
     try:
