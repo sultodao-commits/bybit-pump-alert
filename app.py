@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Volatility Anomaly Alerts → Telegram (Scalingo, c фильтром ликвидности)
+Bybit Volatility Anomaly Alerts → Telegram (Scalingo, все пары USDT с фильтрами)
 - Источник: Bybit Spot (ccxt)
 - Таймфреймы: 5m и 15m
 - Алерты: Telegram Bot API
 - Де-дубль: sqlite (symbol, timeframe, candle_ts)
 - Улучшение: фильтр по 24h объёму (USDT) и минимальной цене
+- Теперь берём все SPOT/USDT пары (игнорируем TOP_MARKETS)
 """
 
 import os
@@ -18,8 +19,6 @@ from typing import List, Tuple
 
 import requests
 import ccxt
-import numpy as np
-import pandas as pd
 from dotenv import load_dotenv
 
 # ------------------------- Конфигурация -------------------------
@@ -27,10 +26,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
-TOP_MARKETS       = int(os.getenv("TOP_MARKETS", "60"))
 THRESH_5M_PCT     = float(os.getenv("THRESH_5M_PCT", "6"))
 THRESH_15M_PCT    = float(os.getenv("THRESH_15M_PCT", "12"))
 
@@ -46,11 +44,9 @@ TIMEFRAMES = [("5m", THRESH_5M_PCT), ("15m", THRESH_15M_PCT)]
 # ------------------------- Утилиты -------------------------
 
 def ts_to_iso(ts_ms: int) -> str:
-    """мс → ISO (UTC)"""
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def send_telegram(text: str) -> None:
-    """Отправить сообщение в Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -103,18 +99,18 @@ def build_exchange() -> ccxt.bybit:
         "options": {"defaultType": "spot"},
     })
 
-def pick_spot_usdt_symbols_with_liquidity(ex: ccxt.Exchange, top_n: int,
-                                          min_qv_usdt: float,
-                                          min_last_price: float) -> List[str]:
+def pick_all_spot_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
+                                              min_qv_usdt: float,
+                                              min_last_price: float) -> List[str]:
     """
-    Выбираем SPOT/USDT пары, исключаем UP/DOWN/3L/3S/4L/4S и стейблы как base.
-    Фильтруем по 24h quoteVolume >= min_qv_usdt и last >= min_last_price.
-    Сортируем по quoteVolume и берём top_n.
+    Берём все SPOT/USDT пары на Bybit.
+    Фильтруем по 24h объёму и минимальной цене.
+    Исключаем UP/DOWN/3L/3S/4L/4S и стейблы.
     """
     markets = ex.load_markets(reload=True)
     tickers = ex.fetch_tickers(params={"type": "spot"})
 
-    candidates = []
+    selected = []
     for sym, m in markets.items():
         try:
             if m.get("type") != "spot" or not m.get("spot"):
@@ -136,20 +132,16 @@ def pick_spot_usdt_symbols_with_liquidity(ex: ccxt.Exchange, top_n: int,
             if last < min_last_price:
                 continue
 
-            candidates.append((sym, qv))
+            selected.append(sym)
         except Exception:
             continue
 
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return [sym for sym, _ in candidates[:max(10, top_n)]]
+    print(f"[SYMBOLS] Отобрано {len(selected)} пар (все подходящие).")
+    return selected
 
 # ------------------------- Аналитика свечи -------------------------
 
 def last_bar_change_pct(ohlcv: list) -> Tuple[float, int]:
-    """
-    Возврат: (изменение последней свечи к предыдущей, %, ts последней свечи)
-    ohlcv: [ts, open, high, low, close, volume]
-    """
     if not ohlcv or len(ohlcv) < 2:
         return 0.0, 0
     prev = float(ohlcv[-2][4])
@@ -176,22 +168,15 @@ def main():
 
     ex = build_exchange()
 
-    # Подбираем пары с фильтром ликвидности
+    # Подбираем все пары с фильтром ликвидности
     symbols = []
     try:
-        symbols = pick_spot_usdt_symbols_with_liquidity(
-            ex, TOP_MARKETS,
+        symbols = pick_all_spot_usdt_symbols_with_liquidity(
+            ex,
             MIN_24H_QUOTE_VOLUME_USDT,
             MIN_LAST_PRICE_USDT
         )
-        print(f"К мониторингу отобрано пар: {len(symbols)}")
-        if symbols[:10]:
-            print(f"Первые 10: {symbols[:10]}")
-        # Пошлём краткий отчёт о количестве пар
-        try:
-            send_telegram(f"📊 К мониторингу отобрано пар: <b>{len(symbols)}</b> (по фильтру ликвидности).")
-        except Exception as e:
-            print(f"[TG] Ошибка отчёта: {e}")
+        send_telegram(f"📊 К мониторингу отобрано пар: <b>{len(symbols)}</b> (все подходящие).")
     except Exception as e:
         print(f"[SYMBOLS] Ошибка подбора пар: {e}")
         traceback.print_exc()
