@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Alerts → Telegram (Pumps + Dumps, History, Revert Time, Daily Report)
+Bybit Futures Alerts → Telegram
+(Pumps + Dumps 5m/15m, FAST 1m, RSI(1m) обзор, История/пост-эффект/реверт, Daily Report)
 
-Только Futures USDT (линейные перпеты, defaultType="swap")
-— Пампы/Дампы на 5m/15m (последняя свеча к предыдущей)
+— Только Futures USDT (линейные перпеты, ccxt options.defaultType="swap")
+— Основные сигналы: 5m/15m (последняя свеча к предыдущей)
+— FAST-сигналы: 1m резкий памп/дамп
+— Второе сообщение к каждому алерту: "Ситуация на минутке" с RSI(1m)
+— Время свечи в сообщениях — по Екатеринбургу (UTC+5)
 — Без дедупликации (сигналы могут повторяться)
-— История + пост-эффект: min/max за 60м, fwd 5/15/30/60м,
-  и время до «реверта» (после пампа — когда цена впервые ниже входа; после дампа — впервые выше входа)
-— Дневной отчёт (UTC-час настраивается)
 """
 
 import os
@@ -16,6 +17,7 @@ import time
 import sqlite3
 import traceback
 from datetime import datetime, timezone, timedelta
+
 from typing import List, Tuple, Optional, Dict
 
 import requests
@@ -32,13 +34,15 @@ assert TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, "Нужно указать TELEG
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
 
-# Пороги пампов (рост, % за свечу)
+# Пороги пампов/дампов (рост/падение, % за свечу)
 THRESH_5M_PCT   = float(os.getenv("THRESH_5M_PCT", "6"))
 THRESH_15M_PCT  = float(os.getenv("THRESH_15M_PCT", "12"))
-
-# Пороги дампов (падение; сравнение идёт chg <= -THRESH_*)
 THRESH_5M_DROP_PCT  = float(os.getenv("THRESH_5M_DROP_PCT", "6"))
 THRESH_15M_DROP_PCT = float(os.getenv("THRESH_15M_DROP_PCT", "12"))
+
+# FAST 1m (мгновенный сигнал)
+FAST_1M_PUMP_PCT = float(os.getenv("FAST_1M_PUMP_PCT", "5"))
+FAST_1M_DUMP_PCT = float(os.getenv("FAST_1M_DUMP_PCT", "5"))
 
 # Фильтры ликвидности
 MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "500000"))
@@ -53,20 +57,26 @@ POST_EFFECT_MINUTES = 60
 # История для агрегатов (дней)
 HISTORY_LOOKBACK_DAYS = int(os.getenv("HISTORY_LOOKBACK_DAYS", "30"))
 
+# Длина RSI для минутной «ситуации»
+RSI_LEN_1M = int(os.getenv("RSI_LEN_1M", "14"))
+
 STATE_DB = os.path.join(os.path.dirname(__file__), "state.db")
 
 TIMEFRAMES = [
     ("5m",  THRESH_5M_PCT,  THRESH_5M_DROP_PCT),
     ("15m", THRESH_15M_PCT, THRESH_15M_DROP_PCT),
 ]
+FAST_TIMEFRAME = "1m"
 
-# ------------------------- Утилиты -------------------------
+# ------------------------- Время/утилиты -------------------------
+
+EKB_TZ = timezone(timedelta(hours=5))  # UTC+5
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-def ts_to_iso(ts_ms: int) -> str:
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+def ts_to_ekb(ts_ms: int) -> str:
+    return datetime.fromtimestamp(ts_ms / 1000, tz=EKB_TZ).strftime("%Y-%m-%d %H:%M:%S ЕКБ")
 
 def send_telegram(text: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -83,41 +93,35 @@ def send_telegram(text: str) -> None:
 def init_db() -> None:
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
-    # Без дедупликации — auto-increment ID
     cur.execute("""
         CREATE TABLE IF NOT EXISTS spikes_v2 (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key_symbol TEXT NOT NULL,      -- 'FUT:BTC/USDT:USDT'
-            timeframe  TEXT NOT NULL,      -- '5m' | '15m'
-            direction  TEXT NOT NULL,      -- 'pump' | 'dump'
+            timeframe  TEXT NOT NULL,      -- '1m'|'5m'|'15m'
+            direction  TEXT NOT NULL,      -- 'pump'|'dump'
             candle_ts  INTEGER NOT NULL,   -- ms
             price      REAL NOT NULL,      -- close на событии
             -- пост-эффект:
             min_return_60m REAL,
             max_return_60m REAL,
             fwd_5m REAL, fwd_15m REAL, fwd_30m REAL, fwd_60m REAL,
-            revert_min INTEGER,            -- ВРЕМЯ ДО РЕВЕРТА (мин): pump→первый close < price; dump→первый close > price
+            revert_min INTEGER,
             evaluated INTEGER DEFAULT 0
         )
     """)
-    # миграция: добавить столбец revert_min, если старый файл БД
     try:
-        cur.execute("ALTER TABLE spikes_v2 ADD COLUMN revert_min INTEGER")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_key_tf_dir ON spikes_v2(key_symbol, timeframe, direction)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_eval_ts ON spikes_v2(evaluated, candle_ts)")
     except Exception:
-        pass  # уже существует
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_key_tf_dir ON spikes_v2(key_symbol, timeframe, direction)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_eval_ts ON spikes_v2(evaluated, candle_ts)")
-    # метаданные
+        pass
     cur.execute("""CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)""")
     con.commit()
     con.close()
 
 def insert_spike(key_symbol: str, timeframe: str, direction: str, candle_ts: int, price: float) -> None:
     con = sqlite3.connect(STATE_DB); cur = con.cursor()
-    cur.execute("""
-        INSERT INTO spikes_v2(key_symbol, timeframe, direction, candle_ts, price)
-        VALUES (?,?,?,?,?)
-    """, (key_symbol, timeframe, direction, int(candle_ts), float(price)))
+    cur.execute("""INSERT INTO spikes_v2(key_symbol,timeframe,direction,candle_ts,price) VALUES(?,?,?,?,?)""",
+                (key_symbol, timeframe, direction, int(candle_ts), float(price)))
     con.commit(); con.close()
 
 def update_spike_outcomes_by_ts(key_symbol: str, timeframe: str, direction: str, candle_ts: int,
@@ -130,7 +134,8 @@ def update_spike_outcomes_by_ts(key_symbol: str, timeframe: str, direction: str,
         UPDATE spikes_v2
         SET min_return_60m=?, max_return_60m=?, fwd_5m=?, fwd_15m=?, fwd_30m=?, fwd_60m=?, revert_min=?, evaluated=1
         WHERE key_symbol=? AND timeframe=? AND direction=? AND candle_ts=? AND evaluated=0
-    """, (min_return_60m, max_return_60m, f5, f15, f30, f60, revert_min, key_symbol, timeframe, direction, int(candle_ts)))
+    """, (min_return_60m, max_return_60m, f5, f15, f30, f60, revert_min,
+          key_symbol, timeframe, direction, int(candle_ts)))
     con.commit(); con.close()
 
 def get_unevaluated_spikes(older_than_min: int = 5) -> List[Tuple[str, str, str, int, float]]:
@@ -162,23 +167,15 @@ def recent_symbol_stats(key_symbol: str, timeframe: str, direction: str,
         arr = [x for x in arr if x is not None]
         return (sum(arr) / len(arr)) if arr else None
 
-    min60 = avg_ok([r[0] for r in rows])
-    max60 = avg_ok([r[1] for r in rows])
-    f5    = avg_ok([r[2] for r in rows])
-    f15   = avg_ok([r[3] for r in rows])
-    f30   = avg_ok([r[4] for r in rows])
-    f60   = avg_ok([r[5] for r in rows])
-    rev   = avg_ok([r[6] for r in rows])
-
     return {
         "episodes": len(rows),
-        "avg_min_60m": min60,
-        "avg_max_60m": max60,
-        "avg_fwd_5m":  f5,
-        "avg_fwd_15m": f15,
-        "avg_fwd_30m": f30,
-        "avg_fwd_60m": f60,
-        "avg_revert_min": rev,   # <-- среднее время до отката/отскока
+        "avg_min_60m": avg_ok([r[0] for r in rows]),
+        "avg_max_60m": avg_ok([r[1] for r in rows]),
+        "avg_fwd_5m":  avg_ok([r[2] for r in rows]),
+        "avg_fwd_15m": avg_ok([r[3] for r in rows]),
+        "avg_fwd_30m": avg_ok([r[4] for r in rows]),
+        "avg_fwd_60m": avg_ok([r[5] for r in rows]),
+        "avg_revert_min": avg_ok([r[6] for r in rows]),
     }
 
 def meta_get(key: str) -> Optional[str]:
@@ -195,7 +192,6 @@ def meta_set(key: str, value: str) -> None:
 # ------------------------- Bybit Futures (ccxt) -------------------------
 
 def ex_swap() -> ccxt.bybit:
-    # Линейные USDT-перпетуалы
     return ccxt.bybit({"enableRateLimit": True, "timeout": 20000, "options": {"defaultType": "swap"}})
 
 def pick_all_swap_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
@@ -240,7 +236,7 @@ def last_bar_change_pct(ohlcv: list) -> Tuple[float, int, float]:
         return 0.0, ts, last_close
     return (last_close / prev_close - 1.0) * 100.0, ts, last_close
 
-# ------------------------- Пост-эффект и время до реверта -------------------------
+# ------------------------- Пост-эффект/реверт -------------------------
 
 def _tf_to_minutes(tf: str) -> int:
     if tf.endswith("m"):
@@ -253,33 +249,22 @@ def compute_post_effect_and_revert(
     ex: ccxt.Exchange, symbol: str, timeframe: str, spike_ts: int, spike_price: float,
     horizon_min: int = POST_EFFECT_MINUTES, direction: str = "pump"
 ) -> Optional[Tuple[float, float, Optional[float], Optional[float], Optional[float], Optional[float], Optional[int]]]:
-    """
-    Возвращает:
-      (min_return_60m, max_return_60m, fwd_5m, fwd_15m, fwd_30m, fwd_60m, revert_min)
-    где revert_min — минуты до первого «пересечения» цены входа в обратную сторону:
-      pump → первый close < spike_price
-      dump → первый close > spike_price
-    """
     tf_min = _tf_to_minutes(timeframe)
     horizon_bars = max(1, horizon_min // tf_min)
     ohlcv = fetch_ohlcv_safe(ex, symbol, timeframe=timeframe, limit=500)
     if not ohlcv:
         return None
-
     idx = None
     for i in range(len(ohlcv)):
         if int(ohlcv[i][0]) == spike_ts:
-            idx = i
-            break
+            idx = i; break
     if idx is None:
         return None
-
     end = min(len(ohlcv) - 1, idx + horizon_bars)
     if end <= idx:
         return None
 
     closes = [float(row[4]) for row in ohlcv[idx:end+1]]
-    # min/max хода
     if len(closes) > 1:
         min_price = min(closes[1:])
         max_price = max(closes[1:])
@@ -289,7 +274,6 @@ def compute_post_effect_and_revert(
     min_return_60m = (min_price / spike_price - 1.0) * 100.0
     max_return_60m = (max_price / spike_price - 1.0) * 100.0
 
-    # fwd-характеристики
     def fwd(delta_min: int) -> Optional[float]:
         bars = max(1, delta_min // tf_min)
         j = idx + bars
@@ -299,18 +283,52 @@ def compute_post_effect_and_revert(
 
     f5, f15, f30, f60 = fwd(5), fwd(15), fwd(30), fwd(60)
 
-    # время до реверта (в минутах)
     revert_min: Optional[int] = None
     for j in range(idx + 1, end + 1):
         c = float(ohlcv[j][4])
         if direction == "pump" and c < spike_price:
-            revert_min = (j - idx) * tf_min
-            break
+            revert_min = (j - idx) * tf_min; break
         if direction == "dump" and c > spike_price:
-            revert_min = (j - idx) * tf_min
-            break
+            revert_min = (j - idx) * tf_min; break
 
     return (min_return_60m, max_return_60m, f5, f15, f30, f60, revert_min)
+
+# ------------------------- RSI(1m) для "ситуации" -------------------------
+
+def calc_rsi_from_closes(closes: List[float], length: int = 14) -> Optional[float]:
+    n = len(closes)
+    if n < length + 1:
+        return None
+    gains = []
+    losses = []
+    for i in range(1, length + 1):
+        ch = closes[-i] - closes[-i - 1]
+        gains.append(max(ch, 0.0))
+        losses.append(max(-ch, 0.0))
+    avg_gain = sum(gains) / length
+    avg_loss = sum(losses) / length
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return max(0.0, min(100.0, rsi))
+
+def minute_context_text(ex: ccxt.Exchange, symbol: str) -> str:
+    try:
+        ohlcv = fetch_ohlcv_safe(ex, symbol, timeframe="1m", limit=RSI_LEN_1M + 2)
+        closes = [float(x[4]) for x in ohlcv]
+        rsi = calc_rsi_from_closes(closes, RSI_LEN_1M)
+        rsi_txt = f"{rsi:.1f}%" if rsi is not None else "н/д"
+        return (f"#МОНЕТА: <b>{symbol.split(':')[0]}</b>\n"
+                f"Ситуация на минутке\n\n"
+                f"📊 RSI(1m,{RSI_LEN_1M}): <b>{rsi_txt}</b>\n"
+                f"$ Биржа: <b>Bybit</b>")
+    except Exception as e:
+        print(f"[1m CONTEXT] {symbol}: {e}")
+        return (f"#МОНЕТА: <b>{symbol.split(':')[0]}</b>\n"
+                f"Ситуация на минутке\n\n"
+                f"📊 RSI(1m): н/д\n"
+                f"$ Биржа: <b>Bybit</b>")
 
 # ------------------------- Форматирование -------------------------
 
@@ -320,10 +338,8 @@ def format_stats_block(stats: Optional[Dict[str, float]], direction: str) -> str
     hdr = "История похожих всплесков (до 60м):" if direction == "pump" else "История похожих дампов (до 60м):"
     lines = [hdr, f"— эпизодов: <b>{stats['episodes']}</b>"]
     if stats.get("avg_revert_min") is not None:
-        if direction == "pump":
-            lines.append(f"— ср. время до отката: <b>{stats['avg_revert_min']:.0f} мин</b>")
-        else:
-            lines.append(f"— ср. время до отскока: <b>{stats['avg_revert_min']:.0f} мин</b>")
+        tag = "отката" if direction == "pump" else "отскока"
+        lines.append(f"— ср. время до {tag}: <b>{stats['avg_revert_min']:.0f} мин</b>")
     if stats.get("avg_min_60m") is not None:
         lines.append(f"— ср. худший ход: <b>{stats['avg_min_60m']:.2f}%</b>")
     if stats.get("avg_max_60m") is not None:
@@ -359,7 +375,7 @@ def maybe_daily_report() -> None:
         msg = (f"📅 Дневной отчёт (24ч)\n"
                f"— Пампов: <b>{pumps}</b>\n"
                f"— Дампов: <b>{dumps}</b>\n"
-               f"— UTC: {utc.strftime('%Y-%m-%d %H:%M')}")
+               f"— Время (UTC): {utc.strftime('%Y-%m-%d %H:%M')}")
         send_telegram(msg)
         meta_set("daily_report_date", today)
     except Exception as e:
@@ -373,10 +389,10 @@ def main():
     init_db()
 
     send_telegram(
-        "✅ Бот запущен (Bybit Futures; пампы и дампы).\n"
+        "✅ Бот запущен (Bybit Futures; Pump/Dump + FAST 1m + RSI(1m)).\n"
         f"Фильтры: объём ≥ {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT, цена ≥ {MIN_LAST_PRICE_USDT} USDT.\n"
-        f"Пороги: Pumps 5m≥{THRESH_5M_PCT}%, 15m≥{THRESH_15M_PCT}% | "
-        f"Dumps 5m≤-{THRESH_5M_DROP_PCT}%, 15m≤-{THRESH_15M_DROP_PCT}%."
+        f"Пороги: 5m≥{THRESH_5M_PCT}%, 15m≥{THRESH_15M_PCT}% | 5m≤-{THRESH_5M_DROP_PCT}%, 15m≤-{THRESH_15M_DROP_PCT}%.\n"
+        f"FAST(1m): +≥{FAST_1M_PUMP_PCT}% / -≥{FAST_1M_DUMP_PCT}%."
         .replace(",", " ")
     )
 
@@ -395,7 +411,7 @@ def main():
             # Дневной отчёт
             maybe_daily_report()
 
-            # Досчёт пост-эффекта + времени до реверта для прошлых событий (>=5 минут спустя)
+            # Пост-эффект и реверты по прошедшим событиям
             try:
                 for key_symbol, timeframe, direction, candle_ts, price in get_unevaluated_spikes(older_than_min=5):
                     try:
@@ -410,18 +426,16 @@ def main():
                                 key_symbol, timeframe, direction, candle_ts,
                                 min60, max60, f5, f15, f30, f60, rev
                             )
-                            time.sleep(0.05)
+                            time.sleep(0.03)
                     except ccxt.RateLimitExceeded:
-                        time.sleep(2)
+                        time.sleep(1.5)
                     except Exception as e:
                         print(f"[POST] {key_symbol} {timeframe}: {e}")
-                        traceback.print_exc()
-                        time.sleep(0.05)
+                        time.sleep(0.03)
             except Exception as e:
                 print(f"[POST-LOOP] Ошибка: {e}")
-                traceback.print_exc()
 
-            # Мониторинг новых событий: ТОЛЬКО FUTURES (без дедупликации)
+            # --- Основные таймфреймы 5m/15m
             for timeframe, pump_thr, dump_thr in TIMEFRAMES:
                 for sym in fut_syms:
                     key_symbol = f"FUT:{sym}"
@@ -435,39 +449,76 @@ def main():
                         if chg >= pump_thr:
                             insert_spike(key_symbol, timeframe, "pump", ts_ms, close)
                             stats = recent_symbol_stats(key_symbol, timeframe, "pump")
-                            extra = ""
-                            if stats and stats.get("avg_revert_min") is not None:
-                                extra = f"\n⏳ Ср. время до отката: <b>{stats['avg_revert_min']:.0f} мин</b>"
                             send_telegram(
-                                f"🚨 <b>Памп</b> (Futures, {timeframe})\n"
+                                f"🚨 <b>Pump</b> (Futures, {timeframe})\n"
                                 f"Контракт: <b>{sym}</b>\n"
                                 f"Рост последней свечи: <b>{chg:.2f}%</b>\n"
-                                f"Свеча: {ts_to_iso(ts_ms)}\n\n"
-                                f"{format_stats_block(stats, 'pump')}{extra}\n\n"
+                                f"Свеча: {ts_to_ekb(ts_ms)}\n\n"
+                                f"{format_stats_block(stats, 'pump')}\n\n"
                                 f"<i>Не финсовет. Риски на вас.</i>"
                             )
+                            # второй пост — «ситуация на минутке»
+                            send_telegram(minute_context_text(fut, sym))
 
                         # 🔻 Дамп
                         if chg <= -dump_thr:
                             insert_spike(key_symbol, timeframe, "dump", ts_ms, close)
                             stats = recent_symbol_stats(key_symbol, timeframe, "dump")
-                            extra = ""
-                            if stats and stats.get("avg_revert_min") is not None:
-                                extra = f"\n⏳ Ср. время до отскока: <b>{stats['avg_revert_min']:.0f} мин</b>"
                             send_telegram(
-                                f"🔻 <b>Дамп</b> (Futures, {timeframe})\n"
+                                f"🔻 <b>Dump</b> (Futures, {timeframe})\n"
                                 f"Контракт: <b>{sym}</b>\n"
                                 f"Падение последней свечи: <b>{chg:.2f}%</b>\n"
-                                f"Свеча: {ts_to_iso(ts_ms)}\n\n"
-                                f"{format_stats_block(stats, 'dump')}{extra}\n\n"
+                                f"Свеча: {ts_to_ekb(ts_ms)}\n\n"
+                                f"{format_stats_block(stats, 'dump')}\n\n"
                                 f"<i>Не финсовет. Риски на вас.</i>"
                             )
+                            # второй пост — «ситуация на минутке»
+                            send_telegram(minute_context_text(fut, sym))
 
                     except ccxt.RateLimitExceeded:
-                        time.sleep(3)
+                        time.sleep(2.0)
                     except Exception as e:
-                        print(f"[SCAN] {sym} {timeframe}: {e}")
-                        time.sleep(0.05)
+                        print(f"[SCAN {timeframe}] {sym}: {e}")
+                        time.sleep(0.03)
+
+            # --- FAST 1m
+            for sym in fut_syms:
+                key_symbol = f"FUT:{sym}"
+                try:
+                    ohlcv = fetch_ohlcv_safe(fut, sym, timeframe=FAST_TIMEFRAME, limit=200)
+                    chg, ts_ms, close = last_bar_change_pct(ohlcv)
+                    if ts_ms == 0:
+                        continue
+
+                    # FAST Pump
+                    if chg >= FAST_1M_PUMP_PCT:
+                        insert_spike(key_symbol, "1m", "pump", ts_ms, close)
+                        send_telegram(
+                            f"🔥 <b>Pump FAST</b> (Futures, 1m)\n"
+                            f"Контракт: <b>{sym}</b>\n"
+                            f"Рост 1m: <b>{chg:.2f}%</b>\n"
+                            f"Свеча: {ts_to_ekb(ts_ms)}\n\n"
+                            f"<i>Не финсовет. Риски на вас.</i>"
+                        )
+                        send_telegram(minute_context_text(fut, sym))
+
+                    # FAST Dump
+                    if chg <= -FAST_1M_DUMP_PCT:
+                        insert_spike(key_symbol, "1m", "dump", ts_ms, close)
+                        send_telegram(
+                            f"⚡️ <b>Dump FAST</b> (Futures, 1m)\n"
+                            f"Контракт: <b>{sym}</b>\n"
+                            f"Падение 1m: <b>{chg:.2f}%</b>\n"
+                            f"Свеча: {ts_to_ekb(ts_ms)}\n\n"
+                            f"<i>Не финсовет. Риски на вас.</i>"
+                        )
+                        send_telegram(minute_context_text(fut, sym))
+
+                except ccxt.RateLimitExceeded:
+                    time.sleep(2.0)
+                except Exception as e:
+                    print(f"[FAST 1m] {sym}: {e}")
+                    time.sleep(0.03)
 
         except Exception as e:
             print(f"[CYCLE] Ошибка верхнего уровня: {e}")
