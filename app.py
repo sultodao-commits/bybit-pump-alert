@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Alerts → Telegram (Pump/Dump, History, Revert, Side Hint)
-Оптимизированная версия с множеством пар
+Оптимизированная версия с батчингом и паузами
 """
 
 import os
@@ -49,7 +49,7 @@ print("=== КОНЕЦ ДИАГНОСТИКИ ===")
 
 # ========================= Конфигурация =========================
 
-POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
+POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "120"))  # Увеличили интервал
 
 # Пороги пампов/дампов (% за свечу сигнального ТФ)
 THRESH_5M_PCT   = float(os.getenv("THRESH_5M_PCT", "6"))
@@ -164,10 +164,6 @@ def get_all_swap_symbols_optimized(ex: ccxt.Exchange) -> List[str]:
                 symbols.append(symbol)
                 count += 1
                 
-                # Логируем прогресс каждые 50 символов
-                if count % 50 == 0:
-                    print(f"📊 Обработано символов: {count}")
-                    
             except Exception as e:
                 continue
                 
@@ -178,10 +174,17 @@ def get_all_swap_symbols_optimized(ex: ccxt.Exchange) -> List[str]:
         print(f"❌ Ошибка получения символов: {e}")
         return []
 
-def fetch_ohlcv_safe(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 10):
-    """Безопасное получение OHLCV"""
+def fetch_ohlcv_safe(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 5):
+    """Безопасное получение OHLCV с обработкой ошибок"""
     try:
         return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    except ccxt.RateLimitExceeded:
+        print(f"⚠️ Rate limit для {symbol}, ждем...")
+        time.sleep(5)
+        return None
+    except ccxt.RequestTimeout:
+        print(f"⚠️ Timeout для {symbol}, пропускаем...")
+        return None
     except Exception as e:
         print(f"❌ Ошибка OHLCV {symbol} {timeframe}: {e}")
         return None
@@ -197,7 +200,6 @@ def last_bar_change_pct(ohlcv: list) -> Tuple[float, int, float]:
             return 0.0, ts, last_close
         return (last_close/prev_close - 1.0)*100.0, ts, last_close
     except Exception as e:
-        print(f"❌ Ошибка расчета изменения: {e}")
         return 0.0, 0, 0.0
 
 # ========================= Индикаторы (1m) =========================
@@ -223,32 +225,16 @@ def rsi(values: List[float], length: int = 14) -> Optional[float]:
     except Exception:
         return None
 
-def bb(values: List[float], length: int = BB_LEN, mult: float = BB_MULT) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    if len(values) < length: 
-        return None, None, None
-    try:
-        window = values[-length:]
-        mean = sum(window) / length
-        var = sum((x-mean)*(x-mean) for x in window) / length
-        std = var ** 0.5
-        upper = mean + mult * std
-        lower = mean - mult * std
-        return mean, upper, lower
-    except Exception:
-        return None, None, None
-
 def one_min_context(ex: ccxt.Exchange, symbol: str):
     try:
-        ohlcv = fetch_ohlcv_safe(ex, symbol, timeframe="1m", limit=50)
+        ohlcv = fetch_ohlcv_safe(ex, symbol, timeframe="1m", limit=30)
         if not ohlcv:
             return None, None, None, None
         closes = [float(x[4]) for x in ohlcv]
         last_close = closes[-1] if closes else None
         r = rsi(closes, 14)
-        _, u, l = bb(closes, BB_LEN, BB_MULT)
-        return last_close, r, u, l
+        return last_close, r, None, None  # Упростили - убрали BB для скорости
     except Exception as e:
-        print(f"[1m ctx] {symbol}: {e}")
         return None, None, None, None
 
 def rsi_status_line(r: Optional[float]) -> str:
@@ -260,11 +246,9 @@ def rsi_status_line(r: Optional[float]) -> str:
         return f"RSI(1m): <b>{r:.1f}</b> — <b>🧊 ПЕРЕПРОДАНО!</b>"
     return f"RSI(1m): <b>{r:.1f}</b> — нейтрально"
 
-def decide_trade_side(direction: str, chg_pct: float, last_close_1m: Optional[float],
-                      upper_bb_1m: Optional[float], lower_bb_1m: Optional[float],
-                      rsi_1m: Optional[float], pump_thr: float, dump_thr: float) -> Tuple[str, Optional[str]]:
+def decide_trade_side(direction: str, chg_pct: float, rsi_1m: Optional[float], pump_thr: float, dump_thr: float) -> Tuple[str, Optional[str]]:
     """
-    УЛУЧШЕННАЯ версия - мгновенные сигналы на откат
+    Упрощенная версия - только RSI для скорости
     """
     if rsi_1m is None:
         return "—", None
@@ -272,35 +256,35 @@ def decide_trade_side(direction: str, chg_pct: float, last_close_1m: Optional[fl
     if direction == "pump":
         if chg_pct >= pump_thr * SIDE_HINT_MULT:
             if rsi_1m >= RSI_OB:
-                return "SHORT", f"🔥 КРИТИЧЕСКИЙ ПАМП {chg_pct:.1f}% + RSI {rsi_1m:.1f} - МГНОВЕННЫЙ ОТКАТ!"
+                return "SHORT", f"🔥 КРИТИЧЕСКИЙ ПАМП {chg_pct:.1f}% + RSI {rsi_1m:.1f}"
             elif rsi_1m >= 75:
                 return "SHORT", f"🚨 Сильный памп {chg_pct:.1f}% + перегрев RSI {rsi_1m:.1f}"
             else:
-                return "SHORT", f"⚡ Сильный памп {chg_pct:.1f}% - вероятен откат"
+                return "SHORT", f"⚡ Сильный памп {chg_pct:.1f}%"
     
     elif direction == "dump":
         if chg_pct <= -dump_thr * SIDE_HINT_MULT:
             if rsi_1m <= RSI_OS:
-                return "LONG", f"🔥 КРИТИЧЕСКИЙ ДАМП {chg_pct:.1f}% + RSI {rsi_1m:.1f} - МГНОВЕННЫЙ ОТСКОК!"
+                return "LONG", f"🔥 КРИТИЧЕСКИЙ ДАМП {chg_pct:.1f}% + RSI {rsi_1m:.1f}"
             elif rsi_1m <= 25:
                 return "LONG", f"🚨 Сильный дамп {chg_pct:.1f}% + перепродан RSI {rsi_1m:.1f}"
             else:
-                return "LONG", f"⚡ Сильный дамп {chg_pct:.1f}% - вероятен отскок"
+                return "LONG", f"⚡ Сильный дамп {chg_pct:.1f}%"
     
     return "—", None
 
 def format_signal_message(side: str, reason: Optional[str]) -> str:
     if side == "—" or reason is None:
-        return "➡️ Идея: — (ожидаем развитие движения)"
+        return "➡️ Идея: —"
     
     if side == "SHORT":
         emoji = "📉"
-        action = "ОТКАТ после пампа"
+        action = "ОТКАТ"
     else:
         emoji = "📈" 
-        action = "ОТСКОК после дампа"
+        action = "ОТСКОК"
     
-    return f"🎯 <b>СИГНАЛ: {side} {emoji}</b>\n🤔 Прогноз: {action}\n📊 Обоснование: {reason}"
+    return f"🎯 СИГНАЛ: {side} {emoji} ({action})\n📊 {reason}"
 
 # ========================= Основной цикл =========================
 
@@ -316,21 +300,21 @@ def main():
         return
 
     try:
-        # Получаем ВСЕ символы (как в оригинале)
-        symbols = get_all_swap_symbols_optimized(fut)
-        print(f"✅ Всего символов: {len(symbols)}")
+        # Получаем ВСЕ символы
+        all_symbols = get_all_swap_symbols_optimized(fut)
+        print(f"✅ Всего символов: {len(all_symbols)}")
         
         # Тестовое сообщение в Telegram
         send_telegram(
             f"✅ Бот запущен\n"
-            f"Символов: {len(symbols)}\n"
+            f"Символов: {len(all_symbols)}\n"
             f"Пороги: 5m ≥ {THRESH_5M_PCT}% | 15m ≥ {THRESH_15M_PCT}%\n"
             f"Мониторинг: ВКЛЮЧЕН"
         )
         
     except Exception as e:
         print(f"❌ Ошибка инициализации: {e}")
-        symbols = []
+        all_symbols = []
 
     print("🔍 Начинаем мониторинг всех символов...")
     
@@ -343,77 +327,79 @@ def main():
             print(f"\n=== Цикл #{cycle_count} ===")
             total_signals = 0
             
+            # Разбиваем символы на батчи по 50 для избежания rate limits
+            batch_size = 50
+            symbol_batches = [all_symbols[i:i + batch_size] for i in range(0, len(all_symbols), batch_size)]
+            
             for timeframe, pump_thr, dump_thr in TIMEFRAMES:
                 signals_found = 0
-                scanned = 0
-                print(f"📊 Сканируем {timeframe} ({len(symbols)} символов)...")
+                print(f"📊 Сканируем {timeframe} ({len(all_symbols)} символов, {len(symbol_batches)} батчей)...")
                 
-                for symbol in symbols:
-                    try:
-                        scanned += 1
-                        
-                        # Получаем данные
-                        ohlcv = fetch_ohlcv_safe(fut, symbol, timeframe=timeframe, limit=5)
-                        if not ohlcv or len(ohlcv) < 2:
+                for batch_num, symbol_batch in enumerate(symbol_batches, 1):
+                    print(f"   Батч {batch_num}/{len(symbol_batches)}: {len(symbol_batch)} символов")
+                    
+                    for symbol in symbol_batch:
+                        try:
+                            # Получаем данные с паузой
+                            ohlcv = fetch_ohlcv_safe(fut, symbol, timeframe=timeframe, limit=3)  # Уменьшили лимит
+                            if not ohlcv or len(ohlcv) < 2:
+                                continue
+                                
+                            chg, ts_ms, close = last_bar_change_pct(ohlcv)
+                            if abs(chg) < 0.1:  # Игнорируем微小ые изменения
+                                continue
+                                
+                            # Проверяем памп/дамп
+                            if chg >= pump_thr:
+                                print(f"🚨 ПАМП {symbol} {timeframe}: {chg:.2f}%")
+                                signals_found += 1
+                                total_signals += 1
+                                
+                                # Получаем контекст для сигнала
+                                last1m, rsi1m, _, _ = one_min_context(fut, symbol)
+                                
+                                # Формируем сигнал (упрощенный)
+                                side, reason = decide_trade_side("pump", chg, rsi1m, pump_thr, dump_thr)
+                                
+                                if side != "—":
+                                    send_telegram(
+                                        f"🚨 <b>ПАМП</b> ({timeframe})\n"
+                                        f"Контракт: <b>{symbol}</b>\n"
+                                        f"Рост: <b>{chg:.2f}%</b> 📈\n"
+                                        f"Свеча: {ts_dual(ts_ms)}\n\n"
+                                        f"{rsi_status_line(rsi1m)}\n"
+                                        f"{format_signal_message(side, reason)}\n\n"
+                                        f"<i>Не финсовет. Риски на вас.</i>"
+                                    )
+                                
+                            elif chg <= -dump_thr:
+                                print(f"🔻 ДАМП {symbol} {timeframe}: {chg:.2f}%")
+                                signals_found += 1
+                                total_signals += 1
+                                
+                                last1m, rsi1m, _, _ = one_min_context(fut, symbol)
+                                
+                                side, reason = decide_trade_side("dump", chg, rsi1m, pump_thr, dump_thr)
+                                
+                                if side != "—":
+                                    send_telegram(
+                                        f"🔻 <b>ДАМП</b> ({timeframe})\n"
+                                        f"Контракт: <b>{symbol}</b>\n"
+                                        f"Падение: <b>{chg:.2f}%</b> 📉\n"
+                                        f"Свеча: {ts_dual(ts_ms)}\n\n"
+                                        f"{rsi_status_line(rsi1m)}\n"
+                                        f"{format_signal_message(side, reason)}\n\n"
+                                        f"<i>Не финсовет. Риски на вас.</i>"
+                                    )
+                                
+                        except Exception as e:
+                            print(f"❌ Ошибка сканирования {symbol}: {e}")
                             continue
-                            
-                        chg, ts_ms, close = last_bar_change_pct(ohlcv)
-                        if chg == 0:
-                            continue
-                            
-                        # Проверяем памп/дамп
-                        if chg >= pump_thr:
-                            print(f"🚨 ПАМП {symbol} {timeframe}: {chg:.2f}%")
-                            signals_found += 1
-                            total_signals += 1
-                            
-                            # Получаем контекст для сигнала
-                            last1m, rsi1m, up1m, lo1m = one_min_context(fut, symbol)
-                            
-                            # Формируем сигнал
-                            side, reason = decide_trade_side(
-                                "pump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr
-                            )
-                            signal_line = format_signal_message(side, reason)
-                            
-                            send_telegram(
-                                f"🚨 <b>ПАМП</b> ({timeframe})\n"
-                                f"Контракт: <b>{symbol}</b>\n"
-                                f"Рост: <b>{chg:.2f}%</b> 📈\n"
-                                f"Свеча: {ts_dual(ts_ms)}\n\n"
-                                f"{rsi_status_line(rsi1m)}\n"
-                                f"{signal_line}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
-                            )
-                            
-                        elif chg <= -dump_thr:
-                            print(f"🔻 ДАМП {symbol} {timeframe}: {chg:.2f}%")
-                            signals_found += 1
-                            total_signals += 1
-                            
-                            last1m, rsi1m, up1m, lo1m = one_min_context(fut, symbol)
-                            
-                            side, reason = decide_trade_side(
-                                "dump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr
-                            )
-                            signal_line = format_signal_message(side, reason)
-                            
-                            send_telegram(
-                                f"🔻 <b>ДАМП</b> ({timeframe})\n"
-                                f"Контракт: <b>{symbol}</b>\n"
-                                f"Падение: <b>{chg:.2f}%</b> 📉\n"
-                                f"Свеча: {ts_dual(ts_ms)}\n\n"
-                                f"{rsi_status_line(rsi1m)}\n"
-                                f"{signal_line}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
-                            )
-                            
-                        # Rate limiting между символами
-                        time.sleep(0.1)
-                        
-                    except Exception as e:
-                        print(f"❌ Ошибка сканирования {symbol}: {e}")
-                        continue
+                    
+                    # Пауза между батчами
+                    if batch_num < len(symbol_batches):
+                        print(f"   💤 Пауза 2 сек между батчами...")
+                        time.sleep(2)
                 
                 print(f"📈 На {timeframe} найдено сигналов: {signals_found}")
             
@@ -425,7 +411,7 @@ def main():
 
         # Ожидание следующего цикла
         elapsed = time.time() - cycle_start
-        sleep_time = max(5.0, POLL_INTERVAL_SEC - elapsed)
+        sleep_time = max(10.0, POLL_INTERVAL_SEC - elapsed)
         print(f"💤 Следующий цикл через {sleep_time:.1f} сек...")
         time.sleep(sleep_time)
 
