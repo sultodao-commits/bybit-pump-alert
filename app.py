@@ -291,60 +291,6 @@ def decide_trade_side(direction: str, chg_pct: float, last_close_1m: Optional[fl
     except Exception:
         return "—", None
 
-# ========================= НОВЫЕ ФУНКЦИИ: Рекомендации по откатам =========================
-
-def is_strong_pump_dump(direction: str, chg_pct: float, rsi_1m: Optional[float], 
-                       pump_thr: float, dump_thr: float) -> Tuple[bool, str]:
-    """
-    Определяет сильный ли это памп/дамп и дает рекомендацию
-    Возвращает: (сильный_ли, рекомендация)
-    """
-    if rsi_1m is None:
-        return False, ""
-    
-    STRONG_MULTIPLIER = 2.0  # Движение в 2 раза сильнее порога
-    RSI_EXTREME_OB = 80
-    RSI_EXTREME_OS = 20
-    
-    if direction == "pump":
-        if chg_pct >= pump_thr * STRONG_MULTIPLIER:
-            if rsi_1m >= RSI_EXTREME_OB:
-                return True, "🔥 СИЛЬНЫЙ ПАМП! RSI в зоне перегрева - вероятен БЫСТРЫЙ ОТКАТ в ближайшие 5-15 минут"
-            elif rsi_1m >= 70:
-                return True, "🚨 Сильный памп + перекупленность - ожидаем откат в течение 15-30 минут"
-            else:
-                return True, "⚡ Сильное движение - возможен откат в течение 30-60 минут"
-        elif chg_pct >= pump_thr:
-            return False, "📈 Обычный памп - наблюдаем за развитием"
-    
-    elif direction == "dump":
-        if chg_pct <= -dump_thr * STRONG_MULTIPLIER:
-            if rsi_1m <= RSI_EXTREME_OS:
-                return True, "🔥 СИЛЬНЫЙ ДАМП! RSI в зоне перепроданности - вероятен БЫСТРЫЙ ОТСКОК в ближайшие 5-15 минут"
-            elif rsi_1m <= 30:
-                return True, "🚨 Сильный дамп + перепроданность - ожидаем отскок в течение 15-30 минут"
-            else:
-                return True, "⚡ Сильное движение - возможен отскок в течение 30-60 минут"
-        elif chg_pct <= -dump_thr:
-            return False, "📉 Обычный дамп - наблюдаем за развитием"
-    
-    return False, ""
-
-def format_recommendation(direction: str, chg_pct: float, rsi_1m: Optional[float], 
-                         pump_thr: float, dump_thr: float) -> str:
-    """
-    Форматирует рекомендацию для сообщения
-    """
-    is_strong, recommendation = is_strong_pump_dump(direction, chg_pct, rsi_1m, pump_thr, dump_thr)
-    
-    if not recommendation:
-        return ""
-    
-    if is_strong:
-        return f"🎯 <b>ВНИМАНИЕ: {recommendation}</b>"
-    else:
-        return f"💡 {recommendation}"
-
 # ========================= Пост-эффект/реверт =========================
 
 def _tf_to_minutes(tf: str) -> int:
@@ -477,10 +423,6 @@ def main():
                             insert_spike(key_symbol, timeframe, "pump", ts_ms, close)
                             stats = recent_symbol_stats(key_symbol, timeframe, "pump")
 
-                            # === ДОБАВЛЕНО: Рекомендация по откату ===
-                            recommendation = format_recommendation("pump", chg, rsi1m, pump_thr, dump_thr)
-                            # ==========================================
-
                             side, reason = decide_trade_side("pump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr)
                             side_line = f"➡️ Идея: <b>{side}</b>" + (f" ({reason})" if reason else "") if side != "—" else "➡️ Идея: —"
 
@@ -490,8 +432,7 @@ def main():
                                 f"Рост: <b>{chg:.2f}%</b>\n"
                                 f"Свеча: {ts_dual(ts_ms)}\n"
                                 f"{rsi_status_line(rsi1m)}\n"
-                                f"{side_line}\n"
-                                f"{recommendation}\n\n"
+                                f"{side_line}\n\n"
                                 f"{format_stats_block(stats,'pump')}\n\n"
                                 f"<i>Не финсовет. Риски на вас.</i>"
                             )
@@ -500,10 +441,6 @@ def main():
                         if chg <= -dump_thr:
                             insert_spike(key_symbol, timeframe, "dump", ts_ms, close)
                             stats = recent_symbol_stats(key_symbol, timeframe, "dump")
-
-                            # === ДОБАВЛЕНО: Рекомендация по отскоку ===
-                            recommendation = format_recommendation("dump", chg, rsi1m, pump_thr, dump_thr)
-                            # ===========================================
 
                             side, reason = decide_trade_side("dump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr)
                             side_line = f"➡️ Идея: <b>{side}</b>" + (f" ({reason})" if reason else "") if side != "—" else "➡️ Идея: —"
@@ -514,8 +451,7 @@ def main():
                                 f"Падение: <b>{chg:.2f}%</b>\n"
                                 f"Свеча: {ts_dual(ts_ms)}\n"
                                 f"{rsi_status_line(rsi1m)}\n"
-                                f"{side_line}\n"
-                                f"{recommendation}\n\n"
+                                f"{side_line}\n\n"
                                 f"{format_stats_block(stats,'dump')}\n\n"
                                 f"<i>Не финсовет. Риски на вас.</i>"
                             )
