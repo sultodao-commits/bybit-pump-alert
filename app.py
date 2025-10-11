@@ -2,14 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Alerts → Telegram (Pump/Dump, History, Revert, Side Hint)
-
-— Пампы/Дампы на 5m/15m (последняя свеча к предыдущей)
-— История + пост-эффект (min/max, fwd 5/15/30/60м, время до реверта)
-— Сообщения только двух типов: Памп 🚨 и Дамп 🔻
-— В каждом сообщении:
-    • RSI(1m) статус (перегрето/перепроданность/нейтрально)
-    • ЯВНОЕ направление идеи: ЛОНГ / ШОРТ / —
-— Время свечи: UTC и Екатеринбург (UTC+5)
 """
 
 import os
@@ -83,7 +75,8 @@ def send_telegram(text: str) -> None:
 # ========================= База данных =========================
 
 def init_db() -> None:
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
+    con = sqlite3.connect(STATE_DB, timeout=30.0)  # Добавил таймаут
+    cur = con.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS spikes_v2 (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +97,8 @@ def init_db() -> None:
     con.commit(); con.close()
 
 def insert_spike(key_symbol: str, timeframe: str, direction: str, candle_ts: int, price: float) -> None:
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
+    con = sqlite3.connect(STATE_DB, timeout=10.0)  # Добавил таймаут
+    cur = con.cursor()
     cur.execute("""INSERT INTO spikes_v2(key_symbol,timeframe,direction,candle_ts,price)
                    VALUES (?,?,?,?,?)""", (key_symbol, timeframe, direction, int(candle_ts), float(price)))
     con.commit(); con.close()
@@ -114,7 +108,8 @@ def update_spike_outcomes_by_ts(key_symbol: str, timeframe: str, direction: str,
                                 f5: Optional[float], f15: Optional[float],
                                 f30: Optional[float], f60: Optional[float],
                                 revert_min: Optional[int]) -> None:
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
+    con = sqlite3.connect(STATE_DB, timeout=10.0)  # Добавил таймаут
+    cur = con.cursor()
     cur.execute("""
         UPDATE spikes_v2
         SET min_return_60m=?, max_return_60m=?, fwd_5m=?, fwd_15m=?, fwd_30m=?, fwd_60m=?, revert_min=?, evaluated=1
@@ -125,7 +120,8 @@ def update_spike_outcomes_by_ts(key_symbol: str, timeframe: str, direction: str,
 
 def get_unevaluated_spikes(older_than_min: int = 5) -> List[Tuple[str, str, str, int, float]]:
     cutoff_ms = int((now_utc() - timedelta(minutes=older_than_min)).timestamp() * 1000)
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
+    con = sqlite3.connect(STATE_DB, timeout=10.0)  # Добавил таймаут
+    cur = con.cursor()
     cur.execute("""
         SELECT key_symbol, timeframe, direction, candle_ts, price
         FROM spikes_v2
@@ -138,7 +134,8 @@ def get_unevaluated_spikes(older_than_min: int = 5) -> List[Tuple[str, str, str,
 def recent_symbol_stats(key_symbol: str, timeframe: str, direction: str,
                         days: int = HISTORY_LOOKBACK_DAYS) -> Optional[Dict[str, float]]:
     since_ms = int((now_utc() - timedelta(days=days)).timestamp() * 1000)
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
+    con = sqlite3.connect(STATE_DB, timeout=10.0)  # Добавил таймаут
+    cur = con.cursor()
     cur.execute("""
         SELECT min_return_60m, max_return_60m, fwd_5m, fwd_15m, fwd_30m, fwd_60m, revert_min
         FROM spikes_v2
@@ -165,7 +162,12 @@ def recent_symbol_stats(key_symbol: str, timeframe: str, direction: str,
 # ========================= Биржа (Bybit swap) =========================
 
 def ex_swap() -> ccxt.bybit:
-    return ccxt.bybit({"enableRateLimit": True, "timeout": 20000, "options": {"defaultType": "swap"}})
+    return ccxt.bybit({
+        "enableRateLimit": True, 
+        "timeout": 20000, 
+        "options": {"defaultType": "swap"},
+        "verbose": False  # ВАЖНО: отключаем логи для экономии памяти
+    })
 
 def pick_all_swap_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
                                               min_qv_usdt: float,
@@ -190,6 +192,13 @@ def pick_all_swap_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
     return selected
 
 def fetch_ohlcv_safe(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 200):
+    for attempt in range(3):  # Добавил повторные попытки
+        try:
+            return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        except (ccxt.RequestTimeout, ccxt.ExchangeNotAvailable) as e:
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)  # Экспоненциальная задержка
     return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 def last_bar_change_pct(ohlcv: list) -> Tuple[float, int, float]:
@@ -363,29 +372,34 @@ def format_stats_block(stats: Optional[Dict[str,float]], direction: str) -> str:
 
 def main():
     print("Инициализация...")
+    
+    # ВАЖНО: Очищаем БД при старте чтобы избежать блокировок
+    if os.path.exists(STATE_DB):
+        try:
+            os.remove(STATE_DB)
+            print("Старая БД удалена")
+        except:
+            print("Не удалось удалить старую БД")
+    
     init_db()
-    fut = ex_swap()
-
-    try:
-        fut_syms = pick_all_swap_usdt_symbols_with_liquidity(fut, MIN_24H_QUOTE_VOLUME_USDT, MIN_LAST_PRICE_USDT)
-        send_telegram(
-            "✅ Бот запущен (Bybit Futures; сигналы: Памп/Дамп)\n"
-            f"Пороги 5m: Pump ≥ {THRESH_5M_PCT:.2f}% | Dump ≤ -{THRESH_5M_DROP_PCT:.2f}%\n"
-            f"Пороги 15m: Pump ≥ {THRESH_15M_PCT:.2f}% | Dump ≤ -{THRESH_15M_DROP_PCT:.2f}%\n"
-            f"Ликвидность: 24h Quote ≥ {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT; Price ≥ {MIN_LAST_PRICE_USDT}\n"
-            f"Подсказка: mult={SIDE_HINT_MULT} | RSI_OB/OS={RSI_OB}/{RSI_OS} | BB={BB_LEN}/{BB_MULT}\n"
-            f"Опрос: каждые {POLL_INTERVAL_SEC}s\n"
-            f"Отобрано контрактов: <b>{len(fut_syms)}</b>"
-            .replace(",", " ")
-        )
-    except Exception as e:
-        print(f"[SYMBOLS] Ошибка подбора: {e}")
-        traceback.print_exc()
-        fut_syms = []
-
+    
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    
     while True:
         cycle_start = time.time()
         try:
+            # Создаем новое соединение каждый цикл (предотвращает утечки)
+            fut = ex_swap()
+            
+            # Получаем свежий список символов
+            fut_syms = pick_all_swap_usdt_symbols_with_liquidity(fut, MIN_24H_QUOTE_VOLUME_USDT, MIN_LAST_PRICE_USDT)
+            
+            if not fut_syms:
+                print("Нет символов для мониторинга")
+                time.sleep(60)
+                continue
+            
             # Досчёт пост-эффекта по прошедшим событиям (спустя ≥5 минут)
             try:
                 for key_symbol, timeframe, direction, candle_ts, price in get_unevaluated_spikes(older_than_min=5):
@@ -461,16 +475,34 @@ def main():
                     except Exception as e:
                         print(f"[SCAN] {sym} {timeframe}: {e}")
                         time.sleep(0.03)
+            
+            # Успешный цикл - сбрасываем счетчик ошибок
+            consecutive_errors = 0
 
         except Exception as e:
-            print(f"[CYCLE] Ошибка верхнего уровня: {e}")
+            consecutive_errors += 1
+            print(f"[CYCLE] Ошибка верхнего уровня [{consecutive_errors}]: {e}")
             traceback.print_exc()
+            
+            # Если много ошибок подряд - перезапускаемся
+            if consecutive_errors >= max_consecutive_errors:
+                print("Критическое количество ошибок, перезапуск...")
+                send_telegram("🔴 Критическое количество ошибок, перезапуск бота")
+                time.sleep(30)
+                return  # Завершаем работу, Docker перезапустит контейнер
 
         elapsed = time.time() - cycle_start
-        time.sleep(max(1.0, POLL_INTERVAL_SEC - elapsed))
+        sleep_time = max(1.0, POLL_INTERVAL_SEC - elapsed)
+        time.sleep(sleep_time)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("Остановка по Ctrl+C")
+    # Бесконечный перезапуск при падении
+    while True:
+        try:
+            main()
+        except KeyboardInterrupt:
+            print("Остановка по Ctrl+C")
+            break
+        except Exception as e:
+            print(f"Критическая ошибка в main: {e}")
+            time.sleep(30)  # Ждем перед перезапуском
