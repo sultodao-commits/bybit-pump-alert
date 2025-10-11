@@ -12,16 +12,52 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Tuple, Optional, Dict
 
-import requests
-import ccxt
-from dotenv import load_dotenv
+# ========================= ДИАГНОСТИКА =========================
+print("=== ДЕБАГ СТАРТ ===")
+print(f"Python path: {os.sys.path}")
 
-# ========================= Конфигурация =========================
+try:
+    import requests
+    print("✅ requests импортирован")
+except ImportError as e:
+    print(f"❌ Ошибка импорта requests: {e}")
 
-load_dotenv()
+try:
+    import ccxt
+    print("✅ ccxt импортирован") 
+except ImportError as e:
+    print(f"❌ Ошибка импорта ccxt: {e}")
+
+try:
+    from dotenv import load_dotenv
+    print("✅ dotenv импортирован")
+except ImportError as e:
+    print(f"❌ Ошибка импорта dotenv: {e}")
+
+# Загружаем .env после импортов
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ .env загружен")
+except Exception as e:
+    print(f"❌ Ошибка загрузки .env: {e}")
+
+# Проверяем критичные переменные
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-assert TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, "Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID"
+print(f"TELEGRAM_BOT_TOKEN: {'ЕСТЬ' if TELEGRAM_BOT_TOKEN else 'НЕТ'}")
+print(f"TELEGRAM_CHAT_ID: {'ЕСТЬ' if TELEGRAM_CHAT_ID else 'НЕТ'}")
+
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: Не указаны TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID")
+    print("Ждем 30 секунд перед выходом...")
+    time.sleep(30)
+    exit(1)
+
+print("=== КОНЕЦ ДИАГНОСТИКИ ===")
+# ========================= КОНЕЦ ДИАГНОСТИКИ =========================
+
+# ========================= Конфигурация =========================
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
 
@@ -76,25 +112,29 @@ def send_telegram(text: str) -> None:
 # ========================= База данных =========================
 
 def init_db() -> None:
-    con = sqlite3.connect(STATE_DB); cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS spikes_v2 (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key_symbol TEXT NOT NULL,
-            timeframe  TEXT NOT NULL,
-            direction  TEXT NOT NULL,      -- 'pump' | 'dump'
-            candle_ts  INTEGER NOT NULL,   -- ms
-            price      REAL NOT NULL,      -- close на событии
-            min_return_60m REAL,
-            max_return_60m REAL,
-            fwd_5m REAL, fwd_15m REAL, fwd_30m REAL, fwd_60m REAL,
-            revert_min INTEGER,
-            evaluated INTEGER DEFAULT 0
-        )
-    """)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_key_tf_dir ON spikes_v2(key_symbol, timeframe, direction)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_eval_ts ON spikes_v2(evaluated, candle_ts)")
-    con.commit(); con.close()
+    try:
+        con = sqlite3.connect(STATE_DB); cur = con.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS spikes_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_symbol TEXT NOT NULL,
+                timeframe  TEXT NOT NULL,
+                direction  TEXT NOT NULL,      -- 'pump' | 'dump'
+                candle_ts  INTEGER NOT NULL,   -- ms
+                price      REAL NOT NULL,      -- close на событии
+                min_return_60m REAL,
+                max_return_60m REAL,
+                fwd_5m REAL, fwd_15m REAL, fwd_30m REAL, fwd_60m REAL,
+                revert_min INTEGER,
+                evaluated INTEGER DEFAULT 0
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_key_tf_dir ON spikes_v2(key_symbol, timeframe, direction)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_spikes_eval_ts ON spikes_v2(evaluated, candle_ts)")
+        con.commit(); con.close()
+        print("✅ База данных инициализирована")
+    except Exception as e:
+        print(f"❌ Ошибка инициализации БД: {e}")
 
 def insert_spike(key_symbol: str, timeframe: str, direction: str, candle_ts: int, price: float) -> None:
     con = sqlite3.connect(STATE_DB); cur = con.cursor()
@@ -163,24 +203,28 @@ def ex_swap() -> ccxt.bybit:
 def pick_all_swap_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
                                               min_qv_usdt: float,
                                               min_last_price: float) -> List[str]:
-    markets = ex.load_markets(reload=True)
-    tickers = ex.fetch_tickers(params={"type": "swap"})
-    selected: List[str] = []
-    for sym, m in markets.items():
-        try:
-            if m.get("type") != "swap" or not m.get("swap"): continue
-            if not m.get("linear"): continue
-            if m.get("settle") != "USDT" or m.get("quote") != "USDT": continue
-            base = m.get("base", "")
-            if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
-            t = tickers.get(sym, {})
-            qv = float(t.get("quoteVolume") or 0.0)
-            last = float(t.get("last") or 0.0)
-            if qv < min_qv_usdt or last < min_last_price: continue
-            selected.append(sym)
-        except Exception:
-            continue
-    return selected
+    try:
+        markets = ex.load_markets(reload=True)
+        tickers = ex.fetch_tickers(params={"type": "swap"})
+        selected: List[str] = []
+        for sym, m in markets.items():
+            try:
+                if m.get("type") != "swap" or not m.get("swap"): continue
+                if not m.get("linear"): continue
+                if m.get("settle") != "USDT" or m.get("quote") != "USDT": continue
+                base = m.get("base", "")
+                if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
+                t = tickers.get(sym, {})
+                qv = float(t.get("quoteVolume") or 0.0)
+                last = float(t.get("last") or 0.0)
+                if qv < min_qv_usdt or last < min_last_price: continue
+                selected.append(sym)
+            except Exception:
+                continue
+        return selected
+    except Exception as e:
+        print(f"❌ Ошибка подбора символов: {e}")
+        return []
 
 def fetch_ohlcv_safe(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 200):
     return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -379,29 +423,41 @@ def format_stats_block(stats: Optional[Dict[str,float]], direction: str) -> str:
 def main():
     print("Инициализация...")
     init_db()
-    fut = ex_swap()
+    
+    try:
+        fut = ex_swap()
+        print("✅ Bybit подключен")
+    except Exception as e:
+        print(f"❌ Ошибка подключения к Bybit: {e}")
+        return
 
     try:
         fut_syms = pick_all_swap_usdt_symbols_with_liquidity(fut, MIN_24H_QUOTE_VOLUME_USDT, MIN_LAST_PRICE_USDT)
-        send_telegram(
-            "✅ Бот запущен (Bybit Futures; сигналы: Памп/Дамп + ОТКАТЫ)\n"
-            f"Пороги 5m: Pump ≥ {THRESH_5M_PCT:.2f}% | Dump ≤ -{THRESH_5M_DROP_PCT:.2f}%\n"
-            f"Пороги 15m: Pump ≥ {THRESH_15M_PCT:.2f}% | Dump ≤ -{THRESH_15M_DROP_PCT:.2f}%\n"
-            f"Сигналы отката: множитель {SIDE_HINT_MULT}x | RSI крит: {RSI_OB}/{RSI_OS}\n"
-            f"Опрос: каждые {POLL_INTERVAL_SEC}s\n"
-            f"Отобрано контрактов: <b>{len(fut_syms)}</b>"
-        )
+        print(f"✅ Найдено символов: {len(fut_syms)}")
+        
+        # ВРЕМЕННО ОТКЛЮЧАЕМ ТЕЛЕГРАМ ДЛЯ ТЕСТА
+        # send_telegram(
+        #     "✅ Бот запущен (Bybit Futures; сигналы: Памп/Дамп + ОТКАТЫ)\n"
+        #     f"Пороги 5m: Pump ≥ {THRESH_5M_PCT:.2f}% | Dump ≤ -{THRESH_5M_DROP_PCT:.2f}%\n"
+        #     f"Отобрано контрактов: <b>{len(fut_syms)}</b>"
+        # )
+        
     except Exception as e:
         print(f"[SYMBOLS] Ошибка подбора: {e}")
         traceback.print_exc()
         fut_syms = []
 
+    print("✅ Начинаем основной цикл...")
+    
     while True:
         cycle_start = time.time()
         try:
             # Досчёт пост-эффекта по прошедшим событиям (спустя ≥5 минут)
             try:
-                for key_symbol, timeframe, direction, candle_ts, price in get_unevaluated_spikes(older_than_min=5):
+                unevaluated = get_unevaluated_spikes(older_than_min=5)
+                if unevaluated:
+                    print(f"📊 Обрабатываем {len(unevaluated)} неоцененных событий")
+                for key_symbol, timeframe, direction, candle_ts, price in unevaluated:
                     try:
                         sym_ccxt = key_symbol.split(":", 1)[1]
                         res = compute_post_effect_and_revert(fut, sym_ccxt, timeframe, candle_ts, price,
@@ -421,6 +477,7 @@ def main():
 
             # Скан сигналов
             for timeframe, pump_thr, dump_thr in TIMEFRAMES:
+                scanned = 0
                 for sym in fut_syms:
                     key_symbol = f"FUT:{sym}"
                     try:
@@ -428,65 +485,36 @@ def main():
                         chg, ts_ms, close = last_bar_change_pct(ohlcv)
                         if ts_ms == 0: continue
 
-                        # Контекст 1m
-                        last1m, rsi1m, up1m, lo1m = one_min_context(fut, sym)
-
+                        scanned += 1
+                        
                         # ---- Памп
                         if chg >= pump_thr:
-                            insert_spike(key_symbol, timeframe, "pump", ts_ms, close)
-                            stats = recent_symbol_stats(key_symbol, timeframe, "pump")
-
-                            # Улучшенный сигнал на откат
-                            side, reason = decide_trade_side(
-                                "pump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr
-                            )
-                            signal_line = format_signal_message(side, reason)
-
-                            send_telegram(
-                                f"🚨 <b>ПАМП</b> (Futures, {timeframe})\n"
-                                f"Контракт: <b>{sym}</b>\n"
-                                f"Рост: <b>{chg:.2f}%</b> 📈\n"
-                                f"Свеча: {ts_dual(ts_ms)}\n\n"
-                                f"{rsi_status_line(rsi1m)}\n"
-                                f"{signal_line}\n\n"
-                                f"{format_stats_block(stats,'pump')}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
-                            )
+                            print(f"🚨 ПАМП {sym} {timeframe}: {chg:.2f}%")
+                            # insert_spike(key_symbol, timeframe, "pump", ts_ms, close)
+                            # ... остальной код для пампа
 
                         # ---- Дамп
                         if chg <= -dump_thr:
-                            insert_spike(key_symbol, timeframe, "dump", ts_ms, close)
-                            stats = recent_symbol_stats(key_symbol, timeframe, "dump")
-
-                            # Улучшенный сигнал на отскок
-                            side, reason = decide_trade_side(
-                                "dump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr
-                            )
-                            signal_line = format_signal_message(side, reason)
-
-                            send_telegram(
-                                f"🔻 <b>ДАМП</b> (Futures, {timeframe})\n"
-                                f"Контракт: <b>{sym}</b>\n"
-                                f"Падение: <b>{chg:.2f}%</b> 📉\n"
-                                f"Свеча: {ts_dual(ts_ms)}\n\n"
-                                f"{rsi_status_line(rsi1m)}\n"
-                                f"{signal_line}\n\n"
-                                f"{format_stats_block(stats,'dump')}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
-                            )
+                            print(f"🔻 ДАМП {sym} {timeframe}: {chg:.2f}%")
+                            # insert_spike(key_symbol, timeframe, "dump", ts_ms, close)
+                            # ... остальной код для дампа
 
                     except ccxt.RateLimitExceeded:
                         time.sleep(2.0)
                     except Exception as e:
                         print(f"[SCAN] {sym} {timeframe}: {e}")
                         time.sleep(0.03)
+                
+                print(f"📊 Просканировано {scanned} символов на {timeframe}")
 
         except Exception as e:
             print(f"[CYCLE] Ошибка верхнего уровня: {e}")
             traceback.print_exc()
 
         elapsed = time.time() - cycle_start
-        time.sleep(max(1.0, POLL_INTERVAL_SEC - elapsed))
+        sleep_time = max(1.0, POLL_INTERVAL_SEC - elapsed)
+        print(f"💤 Спим {sleep_time:.1f} секунд...")
+        time.sleep(sleep_time)
 
 if __name__ == "__main__":
     try:
@@ -496,4 +524,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
         traceback.print_exc()
-        time.sleep(10)
+        print("Ждем 30 секунд перед выходом...")
+        time.sleep(30)
