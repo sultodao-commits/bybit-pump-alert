@@ -10,12 +10,14 @@ Bybit Futures Alerts → Telegram (Pump/Dump, History, Revert, Side Hint)
     • RSI(1m) статус (перегрето/перепроданность/нейтрально)
     • ЯВНОЕ направление идеи: ЛОНГ / ШОРТ / —
 — Время свечи: UTC и Екатеринбург (UTC+5)
+— ФИЛЬТРЫ: только мемкоины и низкая капитализация
 """
 
 import os
 import time
 import sqlite3
 import traceback
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Tuple, Optional, Dict
 
@@ -41,6 +43,31 @@ THRESH_15M_DROP_PCT = float(os.getenv("THRESH_15M_DROP_PCT", "12"))
 # Ликвидность
 MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "500000"))
 MIN_LAST_PRICE_USDT       = float(os.getenv("MIN_LAST_PRICE_USDT", "0.002"))
+
+# ФИЛЬТРЫ ДЛЯ МЕМКОИНОВ И НИЗКОЙ КАПИТАЛИЗАЦИИ
+MAX_MARKET_CAP = float(os.getenv("MAX_MARKET_CAP", "1000000000"))  # 1B max
+MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", "10000000"))    # 10M min
+
+# Списки мемкоинов (будет пополняться автоматически + ручные добавки)
+MEME_KEYWORDS = [
+    'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'MEME', 'WIF', 'BOME', 'BABYDOGE',
+    'ELON', 'DOG', 'CAT', 'HAM', 'TURBO', 'AIDOGE', 'AISHIB', 'PENGU', 'MOCHI',
+    'WOJAK', 'KABOSU', 'KISHU', 'SAMO', 'SNEK', 'POPCAT', 'LILY', 'MOG', 'TOSHI'
+]
+
+# Дополнительные паттерны для мемкоинов
+MEME_PATTERNS = [
+    re.compile(r'.*DOGE.*', re.IGNORECASE),
+    re.compile(r'.*SHIB.*', re.IGNORECASE), 
+    re.compile(r'.*PEPE.*', re.IGNORECASE),
+    re.compile(r'.*FLOKI.*', re.IGNORECASE),
+    re.compile(r'.*BONK.*', re.IGNORECASE),
+    re.compile(r'.*MEME.*', re.IGNORECASE),
+    re.compile(r'.*BABY.*', re.IGNORECASE),
+    re.compile(r'.*ELON.*', re.IGNORECASE),
+    re.compile(r'^[A-Z]*DOG[A-Z]*$', re.IGNORECASE),
+    re.compile(r'^[A-Z]*CAT[A-Z]*$', re.IGNORECASE),
+]
 
 # Пост-эффект
 POST_EFFECT_MINUTES = 60
@@ -79,6 +106,93 @@ def send_telegram(text: str) -> None:
             print(f"[TG] HTTP {r.status_code}: {r.text}")
     except Exception as e:
         print(f"[TG] Exception: {e}")
+
+# ========================= ФИЛЬТРЫ МЕМКОИНОВ =========================
+
+def is_meme_coin(symbol: str) -> bool:
+    """Проверяет, является ли монета мемкоином"""
+    base_symbol = symbol.split('/')[0] if '/' in symbol else symbol
+    
+    # Проверка по ключевым словам
+    for keyword in MEME_KEYWORDS:
+        if keyword in base_symbol.upper():
+            return True
+    
+    # Проверка по регулярным выражениям
+    for pattern in MEME_PATTERNS:
+        if pattern.match(base_symbol):
+            return True
+    
+    # Дополнительные эвристики для мемкоинов
+    meme_indicators = [
+        base_symbol.upper().startswith('MEME'),
+        base_symbol.upper().endswith('DOGE'),
+        base_symbol.upper().endswith('SHIB'),
+        base_symbol.upper().endswith('PEPE'),
+        'DOG' in base_symbol.upper() and len(base_symbol) <= 6,
+        'CAT' in base_symbol.upper() and len(base_symbol) <= 6,
+        'PEPE' in base_symbol.upper(),
+        'FLOKI' in base_symbol.upper(),
+        'BONK' in base_symbol.upper(),
+    ]
+    
+    return any(meme_indicators)
+
+def get_market_cap_estimate(ticker_data: Dict) -> Optional[float]:
+    """
+    Оценка капитализации через объем * цену
+    Это приблизительная оценка, так как точная капитализация не всегда доступна
+    """
+    try:
+        last_price = float(ticker_data.get('last', 0))
+        base_volume = float(ticker_data.get('baseVolume', 0))
+        
+        if last_price > 0 and base_volume > 0:
+            # Примерная оценка: объем * цена * множитель
+            # Это очень грубая оценка! В реальности нужно использовать API с рыночной капой
+            estimated_mcap = base_volume * last_price * 10  # эвристический множитель
+            return estimated_mcap
+    except Exception:
+        pass
+    return None
+
+def filter_meme_and_lowcap_symbols(markets: Dict, tickers: Dict, 
+                                 min_mcap: float, max_mcap: float,
+                                 min_volume: float) -> List[str]:
+    """Фильтрует символы по мемкоинам и капитализации"""
+    selected = []
+    
+    for sym, m in markets.items():
+        try:
+            if m.get("type") != "swap" or not m.get("swap"): continue
+            if not m.get("linear"): continue
+            if m.get("settle") != "USDT" or m.get("quote") != "USDT": continue
+            
+            base = m.get("base", "")
+            if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
+            
+            t = tickers.get(sym, {})
+            qv = float(t.get("quoteVolume") or 0.0)
+            last = float(t.get("last") or 0.0)
+            
+            if qv < min_volume or last < MIN_LAST_PRICE_USDT: continue
+            
+            # ФИЛЬТР: Только мемкоины
+            if not is_meme_coin(sym):
+                continue
+                
+            # ФИЛЬТР: Проверка капитализации (если доступно)
+            estimated_mcap = get_market_cap_estimate(t)
+            if estimated_mcap:
+                if estimated_mcap < min_mcap or estimated_mcap > max_mcap:
+                    continue
+            
+            selected.append(sym)
+            
+        except Exception:
+            continue
+    
+    return selected
 
 # ========================= База данных =========================
 
@@ -172,21 +286,14 @@ def pick_all_swap_usdt_symbols_with_liquidity(ex: ccxt.Exchange,
                                               min_last_price: float) -> List[str]:
     markets = ex.load_markets(reload=True)
     tickers = ex.fetch_tickers(params={"type": "swap"})
-    selected: List[str] = []
-    for sym, m in markets.items():
-        try:
-            if m.get("type") != "swap" or not m.get("swap"): continue
-            if not m.get("linear"): continue
-            if m.get("settle") != "USDT" or m.get("quote") != "USDT": continue
-            base = m.get("base", "")
-            if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
-            t = tickers.get(sym, {})
-            qv = float(t.get("quoteVolume") or 0.0)
-            last = float(t.get("last") or 0.0)
-            if qv < min_qv_usdt or last < min_last_price: continue
-            selected.append(sym)
-        except Exception:
-            continue
+    
+    # ИСПОЛЬЗУЕМ НОВЫЙ ФИЛЬТР вместо старого
+    selected = filter_meme_and_lowcap_symbols(
+        markets, tickers, 
+        MIN_MARKET_CAP, MAX_MARKET_CAP,
+        min_qv_usdt
+    )
+    
     return selected
 
 def fetch_ohlcv_safe(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 200):
@@ -368,14 +475,20 @@ def main():
 
     try:
         fut_syms = pick_all_swap_usdt_symbols_with_liquidity(fut, MIN_24H_QUOTE_VOLUME_USDT, MIN_LAST_PRICE_USDT)
+        
+        # ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ О ФИЛЬТРАХ
+        meme_count = len([s for s in fut_syms if is_meme_coin(s)])
+        
         send_telegram(
             "✅ Бот запущен (Bybit Futures; сигналы: Памп/Дамп)\n"
+            f"<b>ФИЛЬТРЫ:</b> Только мемкоины и низкая капитализация\n"
+            f"Капитализация: ${MIN_MARKET_CAP:,.0f} - ${MAX_MARKET_CAP:,.0f}\n"
             f"Пороги 5m: Pump ≥ {THRESH_5M_PCT:.2f}% | Dump ≤ -{THRESH_5M_DROP_PCT:.2f}%\n"
             f"Пороги 15m: Pump ≥ {THRESH_15M_PCT:.2f}% | Dump ≤ -{THRESH_15M_DROP_PCT:.2f}%\n"
             f"Ликвидность: 24h Quote ≥ {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT; Price ≥ {MIN_LAST_PRICE_USDT}\n"
             f"Подсказка: mult={SIDE_HINT_MULT} | RSI_OB/OS={RSI_OB}/{RSI_OS} | BB={BB_LEN}/{BB_MULT}\n"
             f"Опрос: каждые {POLL_INTERVAL_SEC}s\n"
-            f"Отобрано контрактов: <b>{len(fut_syms)}</b>"
+            f"Отобрано контрактов: <b>{len(fut_syms)}</b> (мемкоинов: {meme_count})"
             .replace(",", " ")
         )
     except Exception as e:
@@ -426,15 +539,16 @@ def main():
                             side, reason = decide_trade_side("pump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr)
                             side_line = f"➡️ Идея: <b>{side}</b>" + (f" ({reason})" if reason else "") if side != "—" else "➡️ Идея: —"
 
+                            # ОБНОВЛЕННОЕ СООБЩЕНИЕ С АКЦЕНТОМ НА МЕМКОИН
                             send_telegram(
-                                f"🚨 <b>Памп</b> (Futures, {timeframe})\n"
-                                f"Контракт: <b>{sym}</b>\n"
+                                f"🚨 <b>ПАМП МЕМКОИНА</b> (Futures, {timeframe})\n"
+                                f"Контракт: <b>{sym}</b> 🐶\n"
                                 f"Рост: <b>{chg:.2f}%</b>\n"
                                 f"Свеча: {ts_dual(ts_ms)}\n"
                                 f"{rsi_status_line(rsi1m)}\n"
                                 f"{side_line}\n\n"
                                 f"{format_stats_block(stats,'pump')}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
+                                f"<i>Мемкоин! Высокие риски! Не финсовет.</i>"
                             )
 
                         # ---- Дамп
@@ -445,15 +559,16 @@ def main():
                             side, reason = decide_trade_side("dump", chg, last1m, up1m, lo1m, rsi1m, pump_thr, dump_thr)
                             side_line = f"➡️ Идея: <b>{side}</b>" + (f" ({reason})" if reason else "") if side != "—" else "➡️ Идея: —"
 
+                            # ОБНОВЛЕННОЕ СООБЩЕНИЕ С АКЦЕНТОМ НА МЕМКОИН
                             send_telegram(
-                                f"🔻 <b>Дамп</b> (Futures, {timeframe})\n"
-                                f"Контракт: <b>{sym}</b>\n"
+                                f"🔻 <b>ДАМП МЕМКОИНА</b> (Futures, {timeframe})\n"
+                                f"Контракт: <b>{sym}</b> 📉\n"
                                 f"Падение: <b>{chg:.2f}%</b>\n"
                                 f"Свеча: {ts_dual(ts_ms)}\n"
                                 f"{rsi_status_line(rsi1m)}\n"
                                 f"{side_line}\n\n"
                                 f"{format_stats_block(stats,'dump')}\n\n"
-                                f"<i>Не финсовет. Риски на вас.</i>"
+                                f"<i>Мемкоин! Высокие риски! Не финсовет.</i>"
                             )
 
                     except ccxt.RateLimitExceeded:
