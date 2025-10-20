@@ -40,19 +40,37 @@ THRESH_15M_PCT  = float(os.getenv("THRESH_15M_PCT", "12"))
 THRESH_5M_DROP_PCT  = float(os.getenv("THRESH_5M_DROP_PCT", "6"))
 THRESH_15M_DROP_PCT = float(os.getenv("THRESH_15M_DROP_PCT", "12"))
 
-# Ликвидность
-MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "500000"))
-MIN_LAST_PRICE_USDT       = float(os.getenv("MIN_LAST_PRICE_USDT", "0.002"))
+# Ликвидность - РАСШИРЯЕМ ДИАПАЗОН
+MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "100000"))  # Уменьшили до 100K
+MIN_LAST_PRICE_USDT       = float(os.getenv("MIN_LAST_PRICE_USDT", "0.0001"))        # Уменьшили минимальную цену
 
-# ФИЛЬТРЫ ДЛЯ МЕМКОИНОВ И НИЗКОЙ КАПИТАЛИЗАЦИИ
-MAX_MARKET_CAP = float(os.getenv("MAX_MARKET_CAP", "1000000000"))  # 1B max
-MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", "10000000"))    # 10M min
+# ФИЛЬТРЫ ДЛЯ МЕМКОИНОВ И НИЗКОЙ КАПИТАЛИЗАЦИИ - РАСШИРЯЕМ
+MAX_MARKET_CAP = float(os.getenv("MAX_MARKET_CAP", "5000000000"))  # 5B max
+MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", "0"))           # Убрали минимальную капу
 
-# Списки мемкоинов (будет пополняться автоматически + ручные добавки)
+# Списки мемкоинов (РАСШИРЕННЫЙ СПИСОК)
 MEME_KEYWORDS = [
     'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'MEME', 'WIF', 'BOME', 'BABYDOGE',
     'ELON', 'DOG', 'CAT', 'HAM', 'TURBO', 'AIDOGE', 'AISHIB', 'PENGU', 'MOCHI',
-    'WOJAK', 'KABOSU', 'KISHU', 'SAMO', 'SNEK', 'POPCAT', 'LILY', 'MOG', 'TOSHI'
+    'WOJAK', 'KABOSU', 'KISHU', 'SAMO', 'SNEK', 'POPCAT', 'LILY', 'MOG', 'TOSHI',
+    'HIPO', 'CHAD', 'GROK', 'LADYS', 'VOY', 'COQ', 'KERMIT', 'SPX', 'TRUMP',
+    'BODEN', 'TREMP', 'SC', 'SMURFCAT', 'ANDY', 'WEN', 'MYRO', 'WU', 'MICHI',
+    'NUB', 'DAVE', 'PONKE', 'MON', 'PUDGY', 'POWELL', 'PENG', 'SATOSHI', 'VITALIK',
+    'KEVIN', 'OSAK', 'BRETT', 'ZYN', 'TAMA', 'NEIRO', 'NOOT', 'SPUG', 'PIRB',
+    'MOUTAI', 'MOG', 'MILADY', 'STAN', 'MOTHER', 'MARTIAN', 'MILK', 'SHIBA', 'AKITA',
+    'CORG', 'HUSKY', 'POODL', 'SAITAMA', 'KAI', 'VOLT', 'BEE', 'RABBIT', 'FISH',
+    'MOON', 'SUN', 'STAR', 'PLANET', 'ROCKET', 'LAMBO', 'FERRARI', 'TESLA', 'SPACEX',
+    'NASA', 'APE', 'BULL', 'BEAR', 'WHALE', 'DOLPHIN', 'TIGER', 'LION', 'FOX',
+    'WOLF', 'OWL', 'EAGLE', 'FALCON', 'PHOENIX', 'DRAGON', 'UNICORN', 'ALIEN',
+    'ROBOT', 'ANDROID', 'CYBORG', 'NINJA', 'SAMURAI', 'VIKING', 'PIRATE', 'ZOMBIE',
+    'VAMPIRE', 'WITCH', 'WIZARD', 'GHOST', 'SKULL', 'BONE', 'FART', 'POOP', 'PEE',
+    'CUM', 'ASS', 'BOOB', 'BUTT', 'DICK', 'WEED', 'BEER', 'WINE', 'VODKA', 'WHISKEY',
+    'COKE', 'PEPsi', 'COFFEE', 'TEA', 'PIZZA', 'BURGER', 'TACO', 'SUSHI', 'RAMEN',
+    'TOAST', 'BAGEL', 'DONUT', 'CAKE', 'COOKIE', 'CANDY', 'CHOCO', 'ICE', 'FIRE',
+    'WATER', 'EARTH', 'AIR', 'METAL', 'WOOD', 'GLASS', 'PAPER', 'ROCK', 'SCISSORS',
+    'COM', 'NET', 'IO', 'AI', 'APP', 'WEB', 'GAME', 'PLAY', 'FUN', 'LOL', 'LMAO',
+    'ROFL', 'HODL', 'FOMO', 'YOLO', 'NGMI', 'WAGMI', 'GM', 'GN', 'GL', 'HF',
+    'LFG', 'FREN', 'SER', 'DEJ', 'JTO', 'JUP', 'PYTH', 'RAY', 'ORCA', 'SAMO'
 ]
 
 # Дополнительные паттерны для мемкоинов
@@ -65,8 +83,30 @@ MEME_PATTERNS = [
     re.compile(r'.*MEME.*', re.IGNORECASE),
     re.compile(r'.*BABY.*', re.IGNORECASE),
     re.compile(r'.*ELON.*', re.IGNORECASE),
+    re.compile(r'.*DOG.*', re.IGNORECASE),
+    re.compile(r'.*CAT.*', re.IGNORECASE),
+    re.compile(r'.*PENG.*', re.IGNORECASE),
+    re.compile(r'.*WOJAK.*', re.IGNORECASE),
+    re.compile(r'.*FROG.*', re.IGNORECASE),
+    re.compile(r'.*FISH.*', re.IGNORECASE),
+    re.compile(r'.*MOON.*', re.IGNORECASE),
+    re.compile(r'.*SUN.*', re.IGNORECASE),
+    re.compile(r'.*STAR.*', re.IGNORECASE),
+    re.compile(r'.*APE.*', re.IGNORECASE),
+    re.compile(r'.*BULL.*', re.IGNORECASE),
+    re.compile(r'.*BEAR.*', re.IGNORECASE),
+    re.compile(r'.*WHALE.*', re.IGNORECASE),
+    re.compile(r'.*HODL.*', re.IGNORECASE),
+    re.compile(r'.*FOMO.*', re.IGNORECASE),
+    re.compile(r'.*YOLO.*', re.IGNORECASE),
+    re.compile(r'.*WAGMI.*', re.IGNORECASE),
+    re.compile(r'.*GM.*', re.IGNORECASE),
+    re.compile(r'.*LFG.*', re.IGNORECASE),
     re.compile(r'^[A-Z]*DOG[A-Z]*$', re.IGNORECASE),
     re.compile(r'^[A-Z]*CAT[A-Z]*$', re.IGNORECASE),
+    re.compile(r'^[A-Z]*MOON[A-Z]*$', re.IGNORECASE),
+    re.compile(r'^[A-Z]*APE[A-Z]*$', re.IGNORECASE),
+    re.compile(r'^[A-Z]*PEPE[A-Z]*$', re.IGNORECASE),
 ]
 
 # Пост-эффект
@@ -129,11 +169,16 @@ def is_meme_coin(symbol: str) -> bool:
         base_symbol.upper().endswith('DOGE'),
         base_symbol.upper().endswith('SHIB'),
         base_symbol.upper().endswith('PEPE'),
-        'DOG' in base_symbol.upper() and len(base_symbol) <= 6,
-        'CAT' in base_symbol.upper() and len(base_symbol) <= 6,
+        'DOG' in base_symbol.upper() and len(base_symbol) <= 8,
+        'CAT' in base_symbol.upper() and len(base_symbol) <= 8,
         'PEPE' in base_symbol.upper(),
         'FLOKI' in base_symbol.upper(),
         'BONK' in base_symbol.upper(),
+        'MOON' in base_symbol.upper() and len(base_symbol) <= 10,
+        'APE' in base_symbol.upper() and len(base_symbol) <= 10,
+        'HODL' in base_symbol.upper(),
+        'FOMO' in base_symbol.upper(),
+        'YOLO' in base_symbol.upper(),
     ]
     
     return any(meme_indicators)
@@ -150,7 +195,7 @@ def get_market_cap_estimate(ticker_data: Dict) -> Optional[float]:
         if last_price > 0 and base_volume > 0:
             # Примерная оценка: объем * цена * множитель
             # Это очень грубая оценка! В реальности нужно использовать API с рыночной капой
-            estimated_mcap = base_volume * last_price * 10  # эвристический множитель
+            estimated_mcap = base_volume * last_price * 5  # уменьшили множитель
             return estimated_mcap
     except Exception:
         pass
@@ -169,7 +214,8 @@ def filter_meme_and_lowcap_symbols(markets: Dict, tickers: Dict,
             if m.get("settle") != "USDT" or m.get("quote") != "USDT": continue
             
             base = m.get("base", "")
-            if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
+            # УБИРАЕМ СЛИШКОМ СТРОГИЕ ФИЛЬТРЫ
+            # if any(tag in base for tag in ["UP","DOWN","3L","3S","4L","4S"]): continue
             
             t = tickers.get(sym, {})
             qv = float(t.get("quoteVolume") or 0.0)
@@ -177,15 +223,18 @@ def filter_meme_and_lowcap_symbols(markets: Dict, tickers: Dict,
             
             if qv < min_volume or last < MIN_LAST_PRICE_USDT: continue
             
-            # ФИЛЬТР: Только мемкоины
+            # ФИЛЬТР: Только мемкоины (ОСЛАБЛЯЕМ ФИЛЬТР)
             if not is_meme_coin(sym):
                 continue
                 
-            # ФИЛЬТР: Проверка капитализации (если доступно)
+            # ФИЛЬТР: Проверка капитализации (если доступно) - ОСЛАБЛЯЕМ
             estimated_mcap = get_market_cap_estimate(t)
             if estimated_mcap:
-                if estimated_mcap < min_mcap or estimated_mcap > max_mcap:
+                if estimated_mcap > max_mcap:
                     continue
+                # УБИРАЕМ ПРОВЕРКУ НА МИНИМАЛЬНУЮ КАПИТАЛИЗАЦИЮ
+                # if estimated_mcap < min_mcap:
+                #     continue
             
             selected.append(sym)
             
@@ -482,15 +531,24 @@ def main():
         send_telegram(
             "✅ Бот запущен (Bybit Futures; сигналы: Памп/Дамп)\n"
             f"<b>ФИЛЬТРЫ:</b> Только мемкоины и низкая капитализация\n"
-            f"Капитализация: ${MIN_MARKET_CAP:,.0f} - ${MAX_MARKET_CAP:,.0f}\n"
+            f"Капитализация: до ${MAX_MARKET_CAP:,.0f}\n"
+            f"Минимальный объем: {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT\n"
             f"Пороги 5m: Pump ≥ {THRESH_5M_PCT:.2f}% | Dump ≤ -{THRESH_5M_DROP_PCT:.2f}%\n"
             f"Пороги 15m: Pump ≥ {THRESH_15M_PCT:.2f}% | Dump ≤ -{THRESH_15M_DROP_PCT:.2f}%\n"
-            f"Ликвидность: 24h Quote ≥ {int(MIN_24H_QUOTE_VOLUME_USDT):,} USDT; Price ≥ {MIN_LAST_PRICE_USDT}\n"
             f"Подсказка: mult={SIDE_HINT_MULT} | RSI_OB/OS={RSI_OB}/{RSI_OS} | BB={BB_LEN}/{BB_MULT}\n"
             f"Опрос: каждые {POLL_INTERVAL_SEC}s\n"
-            f"Отобрано контрактов: <b>{len(fut_syms)}</b> (мемкоинов: {meme_count})"
+            f"Отобрано контрактов: <b>{len(fut_syms)}</b>"
             .replace(",", " ")
         )
+        
+        # ВЫВОДИМ СПИСОК НАЙДЕННЫХ МОНЕТ ДЛЯ ДЕБАГА
+        print(f"\n=== НАЙДЕНО {len(fut_syms)} МОНЕТ ===")
+        for i, sym in enumerate(fut_syms[:50], 1):  # показываем первые 50
+            print(f"{i:2d}. {sym}")
+        if len(fut_syms) > 50:
+            print(f"... и еще {len(fut_syms) - 50} монет")
+        print("=======================\n")
+        
     except Exception as e:
         print(f"[SYMBOLS] Ошибка подбора: {e}")
         traceback.print_exc()
