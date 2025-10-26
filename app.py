@@ -1,168 +1,146 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - ULTRA OPTIMIZED
-Экстренные исправления для появления сигналов
+Bybit Futures Signals Bot - HIGH FREQUENCY REVERSAL
+10+ сигналов в день
 """
 
 import os
 import time
-import traceback
-import re
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-
 import requests
 import ccxt
+from typing import List, Dict, Any, Optional
 
-# ========================= СУПЕР-МЯГКИЕ НАСТРОЙКИ =========================
+# ========================= ОПТИМАЛЬНЫЕ НАСТРОЙКИ =========================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# УЛЬТРА-МЯГКИЕ ФИЛЬТРЫ
-PUMP_THRESHOLD = 3           # Памп от 3% (было 5)
-RSI_OVERBOUGHT = 60          # RSI от 60 (было 70) - СИЛЬНО СНИЖЕНО
-VOLUME_SPIKE_RATIO = 1.2     # Объем от 1.2x (было 1.5)
+# БАЛАНСИРОВАННЫЕ ФИЛЬТРЫ ДЛЯ 10+ СИГНАЛОВ
+MIN_PUMP_STRENGTH = 4          # Памп от 4% (было 5)
+PRICE_REJECTION = 0.8          # Откат 0.8% от пика (было 1.0)
+RSI_OVERBOUGHT = 70            # RSI от 70 (было 72)
+VOLUME_DECREASE = 0.85         # Объем ≤0.85x от пика (было 0.8)
 
 # Торговые параметры
-TARGET_DUMP = 8              # Цель -8% от пика пампа
-STOP_LOSS = 5                # Стоп-лосс +5% от входа
-LEVERAGE = 5                 # Плечо 5x
-
-# Минимальные фильтры
-MAX_MARKET_CAP = 20000000000 # Макс капитализация $20B
-MIN_MARKET_CAP = 1000000     # Мин капитализация $1M
-MIN_24H_VOLUME = 10000       # Мин объем $10K
+TARGET_DUMP = 9               # Цель -9%
+STOP_LOSS = 3.5               # Стоп-лосс +3.5%
+LEVERAGE = 4                  # Плечо 4x
 
 # Интервалы
-POLL_INTERVAL_SEC = 30       # Интервал сканирования 30 сек
-SIGNAL_COOLDOWN_MIN = 10     # Кулдаун на монету 10 мин
+POLL_INTERVAL_SEC = 25        # Чаще сканирование (было 40)
+SIGNAL_COOLDOWN_MIN = 15      # Меньше кулдаун (было 25)
 
-# ========================= УПРОЩЕННЫЙ RSI =========================
+# ========================= ПРОСТЫЕ ИНДИКАТОРЫ =========================
 
-def calculate_rsi_simple(prices: List[float], period: int = 10) -> float:
-    """Упрощенный расчет RSI"""
+def calculate_simple_rsi(prices: List[float], period: int = 12) -> float:  # Укороченный период
+    """Упрощенный RSI"""
     if len(prices) < period + 1:
-        return 50.0  # Возвращаем нейтральный RSI если данных мало
+        return 50.0
     
-    try:
-        gains = 0.0
-        losses = 0.0
-        
-        # Считаем изменения
-        for i in range(1, period + 1):
-            change = prices[-i] - prices[-i-1]
-            if change > 0:
-                gains += change
-            else:
-                losses += abs(change)
-        
-        # Средние значения
-        avg_gain = gains / period
-        avg_loss = losses / period if losses > 0 else 0.0001  # Избегаем деления на 0
-        
-        # Расчет RSI
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        
-        return min(max(rsi, 0), 100)  # Ограничиваем диапазон
-        
-    except Exception as e:
-        print(f"Ошибка RSI: {e}")
-        return 50.0  # Возвращаем нейтральный RSI при ошибке
-
-# ========================= ОСНОВНОЙ КОД =========================
-
-def analyze_pump_strength(ohlcv: List, volume_data: List) -> Dict[str, Any]:
-    """Анализ силы пампа с исправленным RSI"""
-    if len(ohlcv) < 3:
-        return {"strength": 0, "rsi": 50, "volume_ratio": 1}
+    gains = 0
+    losses = 0
     
-    try:
-        # Анализ цены за последние 2 свечи
-        price_changes = []
-        for i in range(1, min(3, len(ohlcv))):
-            prev_close = float(ohlcv[-1-i][4])
-            current_close = float(ohlcv[-1][4])
-            if prev_close > 0:
-                change = (current_close - prev_close) / prev_close * 100
-                price_changes.append(change)
-        
-        strength = sum(price_changes) / len(price_changes) if price_changes else 0
-        
-        # ИСПРАВЛЕННЫЙ RSI расчет
-        closes = [float(x[4]) for x in ohlcv[-20:]]  # Берем больше данных для RSI
-        rsi_val = calculate_rsi_simple(closes, 10)
-        
-        # Volume spike
-        if len(volume_data) >= 10:
-            recent_volumes = [float(x[5]) for x in volume_data[-10:]]
-            avg_volume = sum(recent_volumes[:-1]) / (len(recent_volumes) - 1)
-            current_volume = recent_volumes[-1]
-            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
+    for i in range(1, period + 1):
+        change = prices[-i] - prices[-i-1]
+        if change > 0:
+            gains += change
         else:
-            volume_ratio = 1
-        
-        return {
-            "strength": strength,
-            "rsi": rsi_val,
-            "volume_ratio": volume_ratio
-        }
-        
-    except Exception as e:
-        print(f"Ошибка анализа пампа: {e}")
-        return {"strength": 0, "rsi": 50, "volume_ratio": 1}
+            losses += abs(change)
+    
+    avg_gain = gains / period
+    avg_loss = losses / period if losses > 0 else 0.0001
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-def analyze_quality_signal(symbol: str, category: str, exchange, ohlcv_5m: List, ohlcv_15m: List, ticker: Dict) -> Optional[Dict[str, Any]]:
-    """Анализ сигнала с УЛЬТРА-мягкими фильтрами"""
+def analyze_reversal_optimized(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Dict[str, Any]]:
+    """Оптимизированный анализ для большего количества сигналов"""
     try:
-        current_price = float(ticker['last'])
-        pump_strength = analyze_pump_strength(ohlcv_5m, ohlcv_5m)
+        if len(ohlcv) < 12:  # Меньше данных для скорости
+            return None
         
-        print(f"🔍 {symbol}: памп={pump_strength['strength']:.1f}%, RSI={pump_strength['rsi']:.1f}, объем=x{pump_strength['volume_ratio']:.1f}")
+        # Текущие данные
+        current_candle = ohlcv[-1]
+        current_high = float(current_candle[2])
+        current_low = float(current_candle[3])
+        current_close = float(current_candle[4])
+        current_volume = float(current_candle[5])
         
-        # СУПЕР-МЯГКИЕ УСЛОВИЯ
-        pump_ok = pump_strength["strength"] >= PUMP_THRESHOLD
-        rsi_ok = pump_strength["rsi"] >= RSI_OVERBOUGHT
-        volume_ok = pump_strength["volume_ratio"] >= VOLUME_SPIKE_RATIO
+        # 1. Анализ пампа (последние 8 свечей)
+        recent_highs = [float(x[2]) for x in ohlcv[-8:]]
+        recent_lows = [float(x[3]) for x in ohlcv[-8:]]
         
-        # ДОСТАТОЧНО ЛЮБОГО ИЗ УСЛОВИЙ!
-        if pump_ok or (pump_ok and volume_ok) or (rsi_ok and volume_ok):
-            
-            # Находим пик пампа
-            recent_highs = [float(x[2]) for x in ohlcv_5m[-5:]]
-            pump_high = max(recent_highs) if recent_highs else current_price
-            
-            entry_price = current_price
+        pump_high = max(recent_highs)
+        pump_low = min(recent_lows)
+        pump_strength = (pump_high - pump_low) / pump_low * 100
+        
+        # Слишком слабый памп
+        if pump_strength < MIN_PUMP_STRENGTH:
+            return None
+        
+        # 2. Откат от пика
+        price_rejection_ratio = (pump_high - current_close) / pump_high * 100
+        
+        # 3. RSI анализ
+        closes = [float(x[4]) for x in ohlcv]
+        rsi_current = calculate_simple_rsi(closes)
+        
+        # 4. Анализ объема
+        recent_volumes = [float(x[5]) for x in ohlcv[-8:]]
+        max_volume = max(recent_volumes[:-2]) if len(recent_volumes) > 2 else current_volume
+        volume_ratio = current_volume / max_volume if max_volume > 0 else 1
+        
+        # 5. Анализ свечи (верхняя тень)
+        current_open = float(current_candle[1])
+        body = abs(current_close - current_open)
+        upper_wick = current_high - max(current_open, current_close)
+        wick_ratio = upper_wick / body if body > 0 else 0
+        
+        print(f"🔍 {symbol}: памп={pump_strength:.1f}%, откат={price_rejection_ratio:.1f}%, RSI={rsi_current:.1f}, объем={volume_ratio:.2f}x")
+        
+        # ОСНОВНЫЕ УСЛОВИЯ (2 из 4 должны выполняться + памп)
+        conditions_met = 0
+        conditions_met += 1 if price_rejection_ratio >= PRICE_REJECTION else 0
+        conditions_met += 1 if rsi_current >= RSI_OVERBOUGHT else 0  
+        conditions_met += 1 if volume_ratio <= VOLUME_DECREASE else 0
+        conditions_met += 1 if wick_ratio >= 0.2 else 0  # Верхняя тень ≥20% (было 25%)
+        
+        # БОНУС за сильный памп
+        bonus_conditions = 0
+        if pump_strength > 10:  # Очень сильный памп
+            bonus_conditions += 1
+        if pump_strength > 15:  # Экстремальный памп
+            bonus_conditions += 1
+        
+        total_conditions = conditions_met + bonus_conditions
+        
+        # МИНИМУМ 2 основных условия ИЛИ 1 основное + бонусы
+        if total_conditions >= 2 and conditions_met >= 1:
+            # Расчет целей
+            entry_price = current_close
             take_profit = pump_high * (1 - TARGET_DUMP / 100)
             stop_loss = entry_price * (1 + STOP_LOSS / 100)
             
-            # Расчет уверенности
-            confidence = 60  # Базовая уверенность
-            if pump_ok:
-                confidence += 10
-            if rsi_ok:
-                confidence += 15
-            if volume_ok:
-                confidence += 10
-            if category == "meme":
-                confidence += 10
+            # Уверенность (базовая + за условия)
+            confidence = 55 + (total_conditions * 12)
+            confidence = min(confidence, 85)
             
             return {
                 "symbol": symbol,
-                "category": category,
-                "direction": "SHORT",
+                "direction": "SHORT", 
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "pump_high": pump_high,
-                "pump_strength": pump_strength["strength"],
-                "rsi": pump_strength["rsi"],
-                "volume_ratio": pump_strength["volume_ratio"],
+                "pump_strength": pump_strength,
+                "price_rejection": price_rejection_ratio,
+                "rsi": rsi_current,
+                "volume_ratio": volume_ratio,
+                "wick_ratio": wick_ratio,
                 "confidence": confidence,
                 "leverage": LEVERAGE,
-                "risk_reward": TARGET_DUMP / STOP_LOSS,
+                "conditions_met": total_conditions,
                 "timestamp": time.time()
             }
         
@@ -173,7 +151,8 @@ def analyze_quality_signal(symbol: str, category: str, exchange, ohlcv_5m: List,
         return None
 
 def main():
-    print("🚀🚀🚀 ЗАПУСК СУПЕР-ОПТИМИЗИРОВАННОГО БОТА 🚀🚀🚀")
+    print("🎯 ЗАПУСК ВЫСОКОЧАСТОТНОГО БОТА РАЗВОРОТОВ 🎯")
+    print("💪 ЦЕЛЬ: 10+ СИГНАЛОВ В ДЕНЬ!")
     
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
@@ -182,59 +161,86 @@ def main():
     exchange = ccxt.bybit({"enableRateLimit": True})
     recent_signals = {}
     
-    # Простая загрузка символов
+    # Загрузка БОЛЬШЕ символов
     markets = exchange.load_markets()
     symbols = []
     
     for symbol, market in markets.items():
         try:
             if (market.get("type") == "swap" and market.get("linear") and 
-                market.get("settle") == "USDT" and "USDT" in symbol):
-                symbols.append(symbol)
-                if len(symbols) >= 200:  # Ограничиваем для скорости
+                market.get("settle") == "USDT" and "USDT" in symbol and "/" in symbol):
+                # Приоритет мемным и низкокаповым монетам
+                if any(x in symbol for x in ["PEPE", "FLOKI", "BONK", "SHIB", "DOGE"]):
+                    symbols.insert(0, symbol)  # Мемные в начало
+                else:
+                    symbols.append(symbol)
+                if len(symbols) >= 180:  # БОЛЬШЕ монет (было 120)
                     break
         except:
             continue
     
-    print(f"🎯 Отслеживаем {len(symbols)} монет")
+    print(f"🎯 Отслеживаем {len(symbols)} монет (приоритет мемам)")
     
     send_telegram(
-        f"🔥 <b>ЭКСТРЕННЫЙ ЗАПУСК - СУПЕР-МЯГКИЕ ФИЛЬТРЫ</b>\n"
-        f"<b>Фильтры:</b> Памп ≥{PUMP_THRESHOLD}% | RSI ≥{RSI_OVERBOUGHT} | Объем ≥{VOLUME_SPIKE_RATIO}x\n"
-        f"<b>Цель:</b> -{TARGET_DUMP}% | <b>Плечо:</b> {LEVERAGE}x\n"
-        f"<b>Монет:</b> {len(symbols)}\n\n"
-        f"<i>⚡ СИГНАЛЫ ДОЛЖНЫ ПОЯВИТЬСЯ!</i>"
+        f"🚀 <b>ВЫСОКОЧАСТОТНЫЙ БОТ РАЗВОРОТОВ ЗАПУЩЕН</b>\n"
+        f"<b>Цель:</b> 10+ сигналов в день\n\n"
+        f"<b>Фильтры:</b>\n"
+        f"• Памп ≥{MIN_PUMP_STRENGTH}% | Откат ≥{PRICE_REJECTION}%\n"  
+        f"• RSI ≥{RSI_OVERBOUGHT} | Объем ≤{VOLUME_DECREASE}x\n"
+        f"<b>Торговля:</b>\n"
+        f"• Цель: -{TARGET_DUMP}% | Стоп: +{STOP_LOSS}%\n"
+        f"• Плечо: {LEVERAGE}x | Монет: {len(symbols)}\n\n"
+        f"<i>⚡ Оптимизировано для максимального покрытия!</i>"
     )
     
     cycle_count = 0
+    daily_signals = 0
+    last_reset = time.time()
     
     while True:
         try:
+            # Сброс счетчика каждые 24 часа
+            if time.time() - last_reset > 86400:
+                daily_signals = 0
+                last_reset = time.time()
+                print("🔄 Сброс дневного счетчика сигналов")
+            
             cycle_count += 1
             signals_found = 0
             
-            print(f"\n🔄 Цикл #{cycle_count} - сканируем {len(symbols)} монет...")
+            print(f"\n🔄 Цикл #{cycle_count} | Сегодня: {daily_signals}/10+ сигналов")
             
             for symbol in symbols:
                 try:
-                    # Быстрая загрузка данных
-                    ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=10)
+                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=12)  # Меньше данных
                     ticker = exchange.fetch_ticker(symbol)
                     
-                    if not ohlcv_5m or len(ohlcv_5m) < 3:
+                    if not ohlcv or len(ohlcv) < 12:
                         continue
                     
-                    signal = analyze_quality_signal(symbol, "general", exchange, ohlcv_5m, ohlcv_5m, ticker)
+                    signal = analyze_reversal_optimized(symbol, ohlcv, ticker)
                     
                     if signal:
-                        signal_key = f"{symbol}_{cycle_count}"
-                        if signal_key not in recent_signals:
-                            recent_signals[signal_key] = time.time()
-                            send_telegram(format_signal_message(signal))
-                            print(f"🎉 СИГНАЛ: {symbol} (памп: {signal['pump_strength']:.1f}%, RSI: {signal['rsi']:.1f})")
-                            signals_found += 1
+                        signal_key = symbol
+                        current_time = time.time()
+                        
+                        # Проверка кулдауна
+                        if signal_key in recent_signals:
+                            if (current_time - recent_signals[signal_key]) < SIGNAL_COOLDOWN_MIN * 60:
+                                continue
+                        
+                        recent_signals[signal_key] = current_time
+                        send_telegram(format_signal_message(signal))
+                        print(f"🎯 СИГНАЛ #{daily_signals + 1}: {symbol} (уверенность: {signal['confidence']}%)")
+                        signals_found += 1
+                        daily_signals += 1
+                        
+                        # Лимит на очень активные дни
+                        if daily_signals >= 25:
+                            print("⚠️ Достигнут дневной лимит сигналов")
+                            time.sleep(300)  # Пауза 5 минут
                     
-                    time.sleep(0.02)  # Минимальная задержка
+                    time.sleep(0.015)  # Минимальная задержка
                     
                 except Exception as e:
                     continue
@@ -242,32 +248,38 @@ def main():
             # Очистка старых сигналов
             current_time = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() 
-                            if current_time - v < SIGNAL_COOLDOWN_MIN * 60}
+                            if current_time - v < SIGNAL_COOLDOWN_MIN * 60 * 3}
             
             if signals_found > 0:
-                print(f"🎊 НАЙДЕНО СИГНАЛОВ: {signals_found}")
+                print(f"🎊 Найдено сигналов: {signals_found} | Сегодня: {daily_signals}")
             else:
-                print("😞 Сигналов не найдено")
+                print("⏳ Сигналов нет в этом цикле")
                     
         except Exception as e:
             print(f"💥 Ошибка: {e}")
-            time.sleep(10)
+            time.sleep(15)
         
         print(f"⏰ Следующий цикл через {POLL_INTERVAL_SEC} сек...")
         time.sleep(POLL_INTERVAL_SEC)
 
 def format_signal_message(signal: Dict) -> str:
     return (
-        f"🎯 <b>СИГНАЛ НАЙДЕН!</b>\n\n"
+        f"🔁 <b>СИГНАЛ РАЗВОРОТА #{int(signal['timestamp'] % 1000)}</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Направление:</b> SHORT 🐻\n"
-        f"<b>Памп:</b> {signal['pump_strength']:.1f}%\n"
-        f"<b>RSI:</b> {signal['rsi']:.1f}\n"
-        f"<b>Объем:</b> x{signal['volume_ratio']:.1f}\n"
-        f"<b>Вход:</b> {signal['entry_price']:.6f}\n"
-        f"<b>Цель:</b> {signal['take_profit']:.6f}\n"
-        f"<b>Уверенность:</b> {signal['confidence']:.0f}%\n\n"
-        f"<i>⚡ Мягкие фильтры - проверяй риск!</i>"
+        f"<b>Уверенность:</b> {signal['confidence']}%\n\n"
+        f"<b>Анализ:</b>\n"
+        f"• Памп: {signal['pump_strength']:.1f}%\n"
+        f"• Откат: {signal['price_rejection']:.1f}%\n" 
+        f"• RSI: {signal['rsi']:.1f}\n"
+        f"• Объем: x{signal['volume_ratio']:.2f}\n"
+        f"• Условий: {signal['conditions_met']}/4\n\n"
+        f"<b>Торговля:</b>\n"
+        f"• Вход: {signal['entry_price']:.6f}\n"
+        f"• Цель: {signal['take_profit']:.6f} (-{TARGET_DUMP}%)\n"
+        f"• Стоп: {signal['stop_loss']:.6f} (+{STOP_LOSS}%)\n"
+        f"• Плечо: {signal['leverage']}x\n\n"
+        f"<i>⚡ Риск: средний | Потенциал: высокий</i>"
     )
 
 def send_telegram(text: str):
