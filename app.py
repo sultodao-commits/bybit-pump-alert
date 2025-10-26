@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - REAL-TIME REVERSAL
-Только живые развороты, не упавшие монеты
+Bybit Futures Signals Bot - OPTIMAL REVERSAL  
+Баланс качества и количества
 """
 
 import os
@@ -11,25 +11,25 @@ import requests
 import ccxt
 from typing import List, Dict, Any, Optional
 
-# ========================= СТРОГИЕ РЕАЛЬНЫЕ ФИЛЬТРЫ =========================
+# ========================= ОПТИМАЛЬНЫЕ НАСТРОЙКИ =========================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ФИЛЬТРЫ ТОЛЬКО ДЛЯ ЖИВЫХ РАЗВОРОТОВ
-MIN_PUMP_STRENGTH = 5          # Памп от 5% 
-MAX_PULLBACK_FROM_HIGH = 2.0   # Макс откат 2% от пика (не упавшие!)
-MIN_RSI = 75                   # RSI от 75 (реальная перекупленность)
-VOLUME_DECREASE = 0.7          # Объем ≤0.7x от пика
+# ОПТИМАЛЬНЫЕ ФИЛЬТРЫ ДЛЯ 8-12 СИГНАЛОВ
+MIN_PUMP_STRENGTH = 4.5        # Памп от 4.5% (было 5)
+MAX_PULLBACK_FROM_HIGH = 2.5   # Макс откат 2.5% от пика (было 2)
+MIN_RSI = 72                   # RSI от 72 (было 75)
+VOLUME_DECREASE = 0.75         # Объем ≤0.75x от пика (было 0.7)
 
 # Торговые параметры
-TARGET_DUMP = 11               # Цель -11%
-STOP_LOSS = 3                  # Стоп-лосс +3%
+TARGET_DUMP = 10               # Цель -10%
+STOP_LOSS = 3.5                # Стоп-лосс +3.5%
 LEVERAGE = 4                   # Плечо 4x
 
 # Интервалы
-POLL_INTERVAL_SEC = 20         # Частое сканирование
-SIGNAL_COOLDOWN_MIN = 20       # Кулдаун 20 мин
+POLL_INTERVAL_SEC = 25         # Сканирование каждые 25 сек
+SIGNAL_COOLDOWN_MIN = 18       # Кулдаун 18 мин
 
 # ========================= УЛУЧШЕННЫЕ ИНДИКАТОРЫ =========================
 
@@ -54,8 +54,8 @@ def calculate_accurate_rsi(prices: List[float], period: int = 14) -> float:
     
     return min(max(rsi, 0), 100)
 
-def analyze_live_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Dict[str, Any]]:
-    """Анализ ТОЛЬКО живых разворотов (монеты еще не упали)"""
+def analyze_optimal_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Dict[str, Any]]:
+    """Оптимальный анализ разворотов - баланс качества/количества"""
     try:
         if len(ohlcv) < 15:
             return None
@@ -67,7 +67,7 @@ def analyze_live_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Di
         current_volume = float(current_candle[5])
         current_open = float(current_candle[1])
         
-        # 1. Находим абсолютный пик пампа (последние 10 свечей)
+        # 1. Анализ пампа (последние 10 свечей)
         recent_candles = ohlcv[-10:]
         recent_highs = [float(x[2]) for x in recent_candles]
         recent_lows = [float(x[3]) for x in recent_candles]
@@ -75,73 +75,75 @@ def analyze_live_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Di
         absolute_high = max(recent_highs)
         absolute_low = min(recent_lows)
         
-        # Сила пампа от минимума до максимума
         pump_strength = (absolute_high - absolute_low) / absolute_low * 100
         
-        # 2. КРИТИЧЕСКОЕ: проверяем что монета НЕ УПАЛА
-        # Текущая цена должна быть близко к пику (не более 2% отката)
+        # 2. Проверяем что монета НЕ СИЛЬНО УПАЛА (макс откат 2.5%)
         pullback_from_high = (absolute_high - current_close) / absolute_high * 100
         
-        # Если откат больше 2% - монета уже упала, пропускаем!
         if pullback_from_high > MAX_PULLBACK_FROM_HIGH:
             return None
         
-        # 3. RSI должен быть ВЫСОКИМ (перекупленность)
+        # 3. RSI должен быть ВЫСОКИМ (перекупленность от 72)
         closes = [float(x[4]) for x in ohlcv]
         rsi_current = calculate_accurate_rsi(closes)
         
-        # Если RSI ниже 75 - нет перекупленности, пропускаем!
         if rsi_current < MIN_RSI:
             return None
         
-        # 4. Объем должен СНИЖАТЬСЯ на продолжении роста
+        # 4. Анализ объема
         recent_volumes = [float(x[5]) for x in recent_candles]
-        volume_peak = max(recent_volumes[:-1]) if len(recent_volumes) > 1 else current_volume
+        volume_peak = max(recent_volumes[:-2]) if len(recent_volumes) > 2 else current_volume
         volume_ratio = current_volume / volume_peak if volume_peak > 0 else 1
         
-        # 5. Признаки разворота на текущей свече
+        # 5. Признаки разворота
         body = abs(current_close - current_open)
         upper_wick = current_high - max(current_open, current_close)
         wick_ratio = upper_wick / body if body > 0 else 0
         
-        # Доджи или маленькое тело - неопределенность
-        is_doji = body / (current_high - current_low) < 0.1 if (current_high - current_low) > 0 else False
+        # Доджи или маленькое тело
+        is_doji = body / (current_high - current_low) < 0.15 if (current_high - current_low) > 0 else False
         
         print(f"🔍 {symbol}: памп={pump_strength:.1f}%, откат={pullback_from_high:.1f}%, RSI={rsi_current:.1f}, объем={volume_ratio:.2f}x")
         
-        # ОСНОВНЫЕ КРИТЕРИИ ЖИВОГО РАЗВОРОТА:
+        # ОПТИМАЛЬНЫЕ КРИТЕРИИ:
         conditions = {
             "strong_pump": pump_strength >= MIN_PUMP_STRENGTH,
-            "near_high": pullback_from_high <= MAX_PULLBACK_FROM_HIGH,  # Еще у пика
-            "overbought": rsi_current >= MIN_RSI,  # Реальная перекупленность
+            "near_high": pullback_from_high <= MAX_PULLBACK_FROM_HIGH,
+            "overbought": rsi_current >= MIN_RSI,
             "volume_decreasing": volume_ratio <= VOLUME_DECREASE,
-            "rejection_wick": wick_ratio >= 0.3,  # Сильная верхняя тень
-            "not_doji": not is_doji  # Не доджи
+            "rejection_wick": wick_ratio >= 0.25,  # Верхняя тень от 25%
+            "not_doji": not is_doji
         }
         
         conditions_met = sum(conditions.values())
         
-        # Нужно минимум 4 из 6 условий, включая ОБЯЗАТЕЛЬНО near_high и overbought
-        if (conditions_met >= 4 and 
+        # ОПТИМАЛЬНАЯ ЛОГИКА: 3+ условий, включая ОБЯЗАТЕЛЬНЫЕ near_high и overbought
+        if (conditions_met >= 3 and 
             conditions["near_high"] and 
-            conditions["overbought"] and
-            conditions["strong_pump"]):
+            conditions["overbought"]):
             
-            # Расчет целей - монета еще у пика, цель - падение
+            # Дополнительные бонусы за сильные сигналы
+            bonus_score = 0
+            if pump_strength > 8: bonus_score += 1
+            if volume_ratio < 0.6: bonus_score += 1
+            if wick_ratio > 0.4: bonus_score += 1
+            
+            # Расчет целей
             entry_price = current_close
             take_profit = absolute_high * (1 - TARGET_DUMP / 100)
             stop_loss = entry_price * (1 + STOP_LOSS / 100)
             
-            confidence = 60 + (conditions_met * 8)
-            confidence = min(confidence, 90)
+            # Уверенность с бонусами
+            confidence = 55 + (conditions_met * 10) + (bonus_score * 5)
+            confidence = min(confidence, 85)
             
-            # Определяем стадию разворота
-            if pullback_from_high <= 0.5:
-                stage = "🟢 ТОЧКА РАЗВОРОТА - у пика"
-            elif pullback_from_high <= 1.0:
-                stage = "🟡 НАЧАЛО ОТКАТА - небольшой отскок"
+            # Стадия разворота
+            if pullback_from_high <= 1.0:
+                stage = "🟢 У ПИКА - разворот imminent"
+            elif pullback_from_high <= 1.8:
+                stage = "🟡 НАЧАЛО ОТКАТА - хорошая точка"
             else:
-                stage = "🔴 В ПРОГРЕССЕ - откат начался"
+                stage = "🔴 ОТКАТ ИДЕТ - еще есть потенциал"
             
             return {
                 "symbol": symbol,
@@ -159,6 +161,7 @@ def analyze_live_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Di
                 "leverage": LEVERAGE,
                 "stage": stage,
                 "conditions_met": f"{conditions_met}/6",
+                "bonus_score": bonus_score,
                 "timestamp": time.time()
             }
         
@@ -169,8 +172,8 @@ def analyze_live_reversal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Di
         return None
 
 def main():
-    print("🎯 ЗАПУСК БОТА ЖИВЫХ РАЗВОРОТОВ 🎯")
-    print("⚡ ТОЛЬКО монеты у пиков с RSI 75+!")
+    print("🎯 ЗАПУСК ОПТИМАЛЬНОГО БОТА РАЗВОРОТОВ 🎯")
+    print("⚡ ЦЕЛЬ: 8-12 качественных сигналов в день!")
     
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
@@ -183,7 +186,7 @@ def main():
     markets = exchange.load_markets()
     symbols = []
     
-    volatile_keywords = ["PEPE", "FLOKI", "BONK", "SHIB", "DOGE", "MEME", "BOME", "WIF", "POPCAT"]
+    volatile_keywords = ["PEPE", "FLOKI", "BONK", "SHIB", "DOGE", "MEME", "BOME", "WIF", "POPCAT", "ORDI", "SATS"]
     
     for symbol, market in markets.items():
         try:
@@ -196,28 +199,37 @@ def main():
                 else:
                     symbols.append(symbol)
                     
-                if len(symbols) >= 150:
+                if len(symbols) >= 160:
                     break
         except:
             continue
     
-    print(f"🎯 Отслеживаем {len(symbols)} монет на живые развороты")
+    print(f"🎯 Отслеживаем {len(symbols)} монет")
     
     send_telegram(
-        f"🎯 <b>БОТ ЖИВЫХ РАЗВОРОТОВ ЗАПУЩЕН</b>\n\n"
-        f"<b>ФИЛЬТРЫ РАЗВОРОТА У ПИКА:</b>\n"
+        f"⚡ <b>ОПТИМАЛЬНЫЙ БОТ РАЗВОРОТОВ ЗАПУЩЕН</b>\n\n"
+        f"<b>ФИЛЬТРЫ (ОПТИМАЛЬНЫЕ):</b>\n"
         f"• Памп ≥{MIN_PUMP_STRENGTH}% | Откат ≤{MAX_PULLBACK_FROM_HIGH}%\n"
         f"• RSI ≥{MIN_RSI} | Объем ≤{VOLUME_DECREASE}x\n\n"
-        f"<b>ЦЕЛЬ:</b> монеты у максимумов перед падением\n"
-        f"<b>ИСКЛЮЧЕНО:</b> уже упавшие монеты с RSI 50\n\n"
-        f"<i>⚡ Только качественные сигналы у пиков!</i>"
+        f"<b>ЦЕЛЬ:</b> 8-12 сигналов в день\n"
+        f"<b>КАЧЕСТВО:</b> баланс частоты и точности\n\n"
+        f"<i>🎯 Оптимальный баланс качества/количества!</i>"
     )
+    
+    daily_signals = 0
+    last_reset = time.time()
     
     while True:
         try:
+            # Сброс счетчика каждые 24 часа
+            if time.time() - last_reset > 86400:
+                daily_signals = 0
+                last_reset = time.time()
+                print("🔄 Сброс дневного счетчика сигналов")
+            
             signals_found = 0
             
-            print(f"\n🔄 Сканируем {len(symbols)} монет...")
+            print(f"\n🔄 Сканируем... | Сегодня: {daily_signals} сигналов")
             
             for symbol in symbols:
                 try:
@@ -227,7 +239,7 @@ def main():
                     if not ohlcv or len(ohlcv) < 15:
                         continue
                     
-                    signal = analyze_live_reversal(symbol, ohlcv, ticker)
+                    signal = analyze_optimal_reversal(symbol, ohlcv, ticker)
                     
                     if signal:
                         signal_key = symbol
@@ -238,9 +250,10 @@ def main():
                                 continue
                         
                         recent_signals[signal_key] = current_time
-                        send_telegram(format_reversal_message(signal))
-                        print(f"🎯 ЖИВОЙ РАЗВОРОТ: {symbol} (RSI: {signal['rsi']:.1f}, от пика: {signal['pullback_from_high']:.1f}%)")
+                        send_telegram(format_signal_message(signal))
+                        print(f"🎯 СИГНАЛ #{daily_signals + 1}: {symbol} (уверенность: {signal['confidence']}%)")
                         signals_found += 1
+                        daily_signals += 1
                     
                     time.sleep(0.02)
                     
@@ -253,9 +266,9 @@ def main():
                             if current_time - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
             
             if signals_found > 0:
-                print(f"🎊 Найдено живых разворотов: {signals_found}")
+                print(f"🎊 Найдено сигналов: {signals_found} | Сегодня: {daily_signals}")
             else:
-                print("⏳ Живых разворотов нет - ждем формирования у пиков")
+                print("⏳ Сигналов нет в этом цикле")
                     
         except Exception as e:
             print(f"💥 Ошибка: {e}")
@@ -264,26 +277,25 @@ def main():
         print(f"⏰ Следующий цикл через {POLL_INTERVAL_SEC} сек...")
         time.sleep(POLL_INTERVAL_SEC)
 
-def format_reversal_message(signal: Dict) -> str:
+def format_signal_message(signal: Dict) -> str:
     return (
-        f"🎯 <b>ЖИВОЙ РАЗВОРОТ У ПИКА</b>\n\n"
+        f"🎯 <b>ОПТИМАЛЬНЫЙ РАЗВОРОТ</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Стадия:</b> {signal['stage']}\n"
         f"<b>Направление:</b> SHORT 🐻\n"
         f"<b>Уверенность:</b> {signal['confidence']}%\n\n"
-        f"<b>КРИТИЧЕСКИЕ ПОКАЗАТЕЛИ:</b>\n"
+        f"<b>АНАЛИЗ:</b>\n"
         f"• Памп: {signal['pump_strength']:.1f}%\n"
         f"• От пика: {signal['pullback_from_high']:.1f}% ⚡\n"
         f"• RSI: {signal['rsi']:.1f} ⚡\n"
         f"• Объем: x{signal['volume_ratio']:.2f}\n"
-        f"• Условий: {signal['conditions_met']}\n\n"
+        f"• Условий: {signal['conditions_met']} (+{signal['bonus_score']} бонус)\n\n"
         f"<b>ТОРГОВЛЯ:</b>\n"
         f"• Вход: {signal['entry_price']:.6f}\n"
         f"• Цель: {signal['take_profit']:.6f} (-{TARGET_DUMP}%)\n"
         f"• Стоп: {signal['stop_loss']:.6f} (+{STOP_LOSS}%)\n"
-        f"• Пик: {signal['pump_high']:.6f}\n"
         f"• Плечо: {signal['leverage']}x\n\n"
-        f"<i>⚡ Монета у пика - разворот imminent!</i>"
+        f"<i>⚡ Оптимальное соотношение риск/прибыль!</i>"
     )
 
 def send_telegram(text: str):
