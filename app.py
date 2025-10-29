@@ -4,7 +4,6 @@
 Bybit Futures Signals Bot - STRICT 5M BURST
 Всплески ≥10% за 5 минут
 Без входов, стопов и отката от пика
-Сигнал по каждой монете не повторяется в течение дня
 """
 
 import os
@@ -22,7 +21,6 @@ MIN_PUMP_STRENGTH = 10.0       # Всплеск ≥10% за 5 минут
 MIN_RSI = 65                   # RSI ≥65
 POLL_INTERVAL_SEC = 25         # Интервал проверки
 SIGNAL_COOLDOWN_MIN = 18       # Кулдаун 18 мин
-MAX_SIGNALS_PER_DAY = 20       # Макс. сигналов/день
 
 # ========================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =========================
 
@@ -112,7 +110,6 @@ def main():
 
     exchange = ccxt.bybit({"enableRateLimit": True})
     recent_signals = {}
-    signals_today = set()  # Сюда добавляем монеты, по которым уже были сигналы
 
     markets = exchange.load_markets()
     symbols = []
@@ -131,30 +128,15 @@ def main():
         except:
             continue
 
-    send_telegram("🤖 <b>Бот запущен</b>: фильтр всплески ≥10% / 5м, RSI ≥65. Цель ≤20 сигналов/день. Сигналы по монете не повторяются.")
+    send_telegram("🤖 <b>Бот запущен</b>: фильтр всплески ≥10% / 5м, RSI ≥65. Без ограничений по сигналам.")
 
-    daily_signals = 0
-    last_reset = time.time()
+    signal_count = 0
 
     while True:
         try:
-            # Сброс счетчика и списка сигналов каждые 24 часа
-            if time.time() - last_reset > 86400:
-                daily_signals = 0
-                last_reset = time.time()
-                signals_today.clear()
-                print("🔄 Сброс дневного счётчика и списка сигналов")
-
-            print(f"\n⏱️ Сканирование... | Сегодня: {daily_signals}/{MAX_SIGNALS_PER_DAY}")
+            print(f"\n⏱️ Сканирование... | Всего сигналов: {signal_count}")
 
             for symbol in symbols:
-                if daily_signals >= MAX_SIGNALS_PER_DAY:
-                    print("🛑 Достигнут лимит сигналов")
-                    break
-
-                if symbol in signals_today:  # Пропускаем повторные сигналы по одной монете
-                    continue
-
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=10)
                     ticker = exchange.fetch_ticker(symbol)
@@ -169,12 +151,11 @@ def main():
                     if symbol in recent_signals and (now - recent_signals[symbol]) < SIGNAL_COOLDOWN_MIN * 60:
                         continue
 
-                    # Добавляем монету в список сигналов на сегодня
+                    # Отправляем сигнал
                     recent_signals[symbol] = now
-                    signals_today.add(symbol)
                     send_telegram(format_signal_message(signal))
-                    daily_signals += 1
-                    print(f"🎯 СИГНАЛ #{daily_signals}: {symbol}")
+                    signal_count += 1
+                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol}")
 
                 except Exception as e:
                     print(f"Ошибка {symbol}: {e}")
