@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - TradingView Logic
-СУПЕР-МЯГКИЕ ФИЛЬТРЫ
+Bybit Futures Signals Bot - АБСОЛЮТНЫЙ МИНИМУМ
 """
 
 import os
@@ -17,31 +16,19 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= СУПЕР-МЯГКИЕ НАСТРОЙКИ =========================
+# ========================= АБСОЛЮТНЫЙ МИНИМУМ =========================
 
 # CORE
 RSI_LENGTH = 14
-EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (ОЧЕНЬ МЯГКИЕ)
-RSI_PANIC_THRESHOLD = 42    # Очень мягко
-RSI_FOMO_THRESHOLD = 58     # Очень мягко
-RSI_MODE = "zone-hook"
-
-# FILTERS (МИНИМУМ)
-USE_EMA_SIDE_FILTER = False
-USE_SLOPE_FILTER = False
-MIN_VOLUME_ZSCORE = -1.5    # Очень мягко
-REQUIRE_RETURN_BB = False   # Касания BB
-REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.15         # Очень мягко
-USE_HTF_CONFIRM = False
+# THRESHOLDS (СУПЕР-МЯГКИЕ)
+RSI_PANIC_THRESHOLD = 46    # ОЧЕНЬ мягко
+RSI_FOMO_THRESHOLD = 54     # ОЧЕНЬ мягко
 
 POLL_INTERVAL_SEC = 25
-SIGNAL_COOLDOWN_MIN = 8
-CHUNK_SIZE = 100
+SIGNAL_COOLDOWN_MIN = 2     # Минимальный кулдаун
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -59,13 +46,6 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
     rsi = 100 - (100 / (1 + rs))
     return min(max(rsi, 0), 100)
 
-def calculate_ema(prices: List[float], period: int) -> float:
-    if len(prices) < period:
-        return prices[-1] if prices else 0
-    weights = np.exp(np.linspace(-1., 0., period))
-    weights /= weights.sum()
-    return np.convolve(prices[-period:], weights, mode='valid')[-1]
-
 def calculate_bollinger_bands(prices: List[float], period: int, mult: float) -> tuple:
     if len(prices) < period:
         basis = prices[-1] if prices else 0
@@ -76,105 +56,60 @@ def calculate_bollinger_bands(prices: List[float], period: int, mult: float) -> 
     lower = basis - dev
     return basis, upper, lower
 
-def calculate_volume_zscore(volumes: List[float], period: int) -> float:
-    if len(volumes) < period:
-        return 0.0
-    recent_volumes = volumes[-period:]
-    mean_vol = np.mean(recent_volumes)
-    std_vol = np.std(recent_volumes)
-    if std_vol == 0:
-        return 0.0
-    return (volumes[-1] - mean_vol) / std_vol
-
-# ========================= ЛОГИКА СИГНАЛОВ =========================
+# ========================= ПРОСТЕЙШАЯ ЛОГИКА =========================
 
 def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
-        if len(ohlcv) < max(RSI_LENGTH, EMA_LENGTH, BB_LENGTH) + 5:
+        if len(ohlcv) < 15:
             return None
 
         closes = [float(c[4]) for c in ohlcv]
-        opens = [float(c[1]) for c in ohlcv]
         highs = [float(c[2]) for c in ohlcv]
         lows = [float(c[3]) for c in ohlcv]
-        volumes = [float(c[5]) for c in ohlcv]
 
         current_close = closes[-1]
-        current_open = opens[-1]
         current_high = highs[-1]
         current_low = lows[-1]
 
-        # Индикаторы
+        # ТОЛЬКО БАЗОВЫЕ ИНДИКАТОРЫ
         rsi = calculate_rsi(closes, RSI_LENGTH)
-        ema = calculate_ema(closes, EMA_LENGTH)
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
-        volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
+
+        # САМЫЕ ПРОСТЫЕ УСЛОВИЯ
+        long_condition = rsi < RSI_PANIC_THRESHOLD
+        short_condition = rsi > RSI_FOMO_THRESHOLD
         
-        # Фильтр объема (ОЧЕНЬ МЯГКИЙ)
-        volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
+        long_bb = current_low <= bb_lower
+        short_bb = current_high >= bb_upper
 
-        # Фильтр свечи (ОЧЕНЬ МЯГКИЙ)
-        candle_range = max(current_high - current_low, 0.0001)
-        body = abs(current_close - current_open)
-        body_pct = body / candle_range
-        bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
-        bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
-
-        # RSI триггеры
-        prev_rsi = calculate_rsi(closes[:-1], RSI_LENGTH) if len(closes) > RSI_LENGTH + 1 else 50
-        
-        # zone-hook логика
-        long_rsi_trigger = (rsi < RSI_PANIC_THRESHOLD) and (rsi > prev_rsi)
-        short_rsi_trigger = (rsi > RSI_FOMO_THRESHOLD) and (rsi < prev_rsi)
-
-        # BB триггеры (касания)
-        long_bb_trigger = current_low <= bb_lower
-        short_bb_trigger = current_high >= bb_upper
-
-        # Комбинированные триггеры
-        long_raw_trigger = long_rsi_trigger or long_bb_trigger
-        short_raw_trigger = short_rsi_trigger or short_bb_trigger
-
-        # Подтверждение свечой
-        candle_pass_long = REQUIRE_CANDLE_CONFIRM and bull_candle_ok
-        candle_pass_short = REQUIRE_CANDLE_CONFIRM and bear_candle_ok
-
-        # Финальные сигналы
-        long_signal = (long_raw_trigger and candle_pass_long and volume_pass)
-        short_signal = (short_raw_trigger and candle_pass_short and volume_pass)
+        long_signal = long_condition or long_bb
+        short_signal = short_condition or short_bb
 
         if not long_signal and not short_signal:
             return None
 
+        # Определяем тип сигнала
         if long_signal:
             signal_type = "LONG"
-            confidence = 60 + min(rsi - RSI_PANIC_THRESHOLD, 30)
-            trigger_source = "RSI" if long_rsi_trigger else "BB"
+            trigger_source = "RSI" if long_condition else "BB"
         else:
             signal_type = "SHORT"
-            confidence = 60 + min(RSI_FOMO_THRESHOLD - rsi, 30)
-            trigger_source = "RSI" if short_rsi_trigger else "BB"
+            trigger_source = "RSI" if short_condition else "BB"
 
-        confidence = min(confidence, 85)
-
-        print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f}")
+        print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | Close={current_close:.4f}")
 
         return {
             "symbol": symbol,
             "type": signal_type,
             "rsi": rsi,
-            "ema": ema,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
-            "volume_zscore": volume_zscore,
-            "body_pct": body_pct,
             "trigger": trigger_source,
-            "confidence": confidence,
+            "confidence": 65,
             "timestamp": time.time()
         }
 
     except Exception as e:
-        print(f"Ошибка анализа {symbol}: {e}")
         return None
 
 # ========================= TELEGRAM =========================
@@ -200,20 +135,15 @@ def format_signal_message(signal: Dict) -> str:
     return (
         f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
-        f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n\n"
-        f"<b>АНАЛИЗ:</b>\n"
-        f"• RSI: {signal['rsi']:.1f}\n"
-        f"• BB: {signal['bb_lower']:.4f} - {signal['bb_upper']:.4f}\n"
-        f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
-        f"• Тело свечи: {signal['body_pct']:.1%}\n"
-        f"• Триггер: {signal['trigger']}\n\n"
-        f"<i>🎯 Мягкие фильтры</i>"
+        f"<b>RSI:</b> {signal['rsi']:.1f}\n"
+        f"<b>Триггер:</b> {signal['trigger']}\n\n"
+        f"<i>⚡ Минимальные требования</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: СУПЕР-МЯГКИЕ ФИЛЬТРЫ")
+    print("🚀 ЗАПУСК БОТА: АБСОЛЮТНЫЙ МИНИМУМ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -234,24 +164,20 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Супер-мягкие фильтры | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Абсолютный минимум | {total_symbols} монет")
 
     signal_count = 0
     chunk_index = 0
 
     while True:
         try:
-            total_chunks = (total_symbols + CHUNK_SIZE - 1) // CHUNK_SIZE
-            start_idx = chunk_index * CHUNK_SIZE
-            end_idx = min((chunk_index + 1) * CHUNK_SIZE, total_symbols)
-            current_chunk = symbols[start_idx:end_idx]
-            
-            print(f"\n⏱️ Чанк {chunk_index + 1}/{total_chunks} | Сигналов: {signal_count}")
+            # Сканируем все монеты сразу (без чанков)
+            print(f"\n⏱️ Сканирование... | Сигналов: {signal_count}")
 
-            for symbol in current_chunk:
+            for symbol in symbols:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=50)
-                    if not ohlcv or len(ohlcv) < 30:
+                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=20)
+                    if not ohlcv or len(ohlcv) < 15:
                         continue
 
                     signal = analyze_tv_signals(symbol, ohlcv)
@@ -270,7 +196,7 @@ def main():
                 except Exception as e:
                     continue
 
-            chunk_index = (chunk_index + 1) % total_chunks
+            # Очистка старых сигналов
             now = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() if now - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
 
