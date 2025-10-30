@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Signals Bot - TradingView Logic
-ОПТИМАЛЬНЫЕ НАСТРОЙКИ
+СУПЕР-МЯГКИЕ ФИЛЬТРЫ
 """
 
 import os
@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= ОПТИМАЛЬНЫЕ НАСТРОЙКИ =========================
+# ========================= СУПЕР-МЯГКИЕ НАСТРОЙКИ =========================
 
 # CORE
 RSI_LENGTH = 14
@@ -25,22 +25,22 @@ EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (ОПТИМАЛЬНЫЕ)
-RSI_PANIC_THRESHOLD = 38    # Идеальный баланс
-RSI_FOMO_THRESHOLD = 62     # Идеальный баланс
+# THRESHOLDS (ОЧЕНЬ МЯГКИЕ)
+RSI_PANIC_THRESHOLD = 42    # Очень мягко
+RSI_FOMO_THRESHOLD = 58     # Очень мягко
 RSI_MODE = "zone-hook"
 
-# FILTERS (ОПТИМАЛЬНЫЕ)
-USE_EMA_SIDE_FILTER = False   # ВЫКЛ - слишком строго
-USE_SLOPE_FILTER = False      # ВЫКЛ - слишком строго
-MIN_VOLUME_ZSCORE = -0.3      # Мягкий но рабочий
-REQUIRE_RETURN_BB = False     # ВЫКЛ - ловим касания
+# FILTERS (МИНИМУМ)
+USE_EMA_SIDE_FILTER = False
+USE_SLOPE_FILTER = False
+MIN_VOLUME_ZSCORE = -1.5    # Очень мягко
+REQUIRE_RETURN_BB = False   # Касания BB
 REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.25           # Реалистичное тело
+MIN_BODY_PCT = 0.15         # Очень мягко
 USE_HTF_CONFIRM = False
 
 POLL_INTERVAL_SEC = 25
-SIGNAL_COOLDOWN_MIN = 10
+SIGNAL_COOLDOWN_MIN = 8
 CHUNK_SIZE = 100
 
 # ========================= ИНДИКАТОРЫ =========================
@@ -110,10 +110,10 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
         volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # Фильтр объема
+        # Фильтр объема (ОЧЕНЬ МЯГКИЙ)
         volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
 
-        # Фильтр свечи
+        # Фильтр свечи (ОЧЕНЬ МЯГКИЙ)
         candle_range = max(current_high - current_low, 0.0001)
         body = abs(current_close - current_open)
         body_pct = body / candle_range
@@ -139,7 +139,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         candle_pass_long = REQUIRE_CANDLE_CONFIRM and bull_candle_ok
         candle_pass_short = REQUIRE_CANDLE_CONFIRM and bear_candle_ok
 
-        # Финальные сигналы (МИНИМУМ фильтров)
+        # Финальные сигналы
         long_signal = (long_raw_trigger and candle_pass_long and volume_pass)
         short_signal = (short_raw_trigger and candle_pass_short and volume_pass)
 
@@ -148,16 +148,16 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
 
         if long_signal:
             signal_type = "LONG"
-            confidence = 65 + min(rsi - RSI_PANIC_THRESHOLD, 25)
+            confidence = 60 + min(rsi - RSI_PANIC_THRESHOLD, 30)
             trigger_source = "RSI" if long_rsi_trigger else "BB"
         else:
             signal_type = "SHORT"
-            confidence = 65 + min(RSI_FOMO_THRESHOLD - rsi, 25)
+            confidence = 60 + min(RSI_FOMO_THRESHOLD - rsi, 30)
             trigger_source = "RSI" if short_rsi_trigger else "BB"
 
-        confidence = min(confidence, 90)
+        confidence = min(confidence, 85)
 
-        print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
+        print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f}")
 
         return {
             "symbol": symbol,
@@ -207,13 +207,13 @@ def format_signal_message(signal: Dict) -> str:
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n"
         f"• Триггер: {signal['trigger']}\n\n"
-        f"<i>🎯 Оптимальные настройки</i>"
+        f"<i>🎯 Мягкие фильтры</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ОПТИМАЛЬНЫЕ НАСТРОЙКИ")
+    print("🚀 ЗАПУСК БОТА: СУПЕР-МЯГКИЕ ФИЛЬТРЫ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -234,7 +234,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Оптимальные настройки | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Супер-мягкие фильтры | {total_symbols} монет")
 
     signal_count = 0
     chunk_index = 0
