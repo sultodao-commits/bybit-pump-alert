@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Signals Bot - TradingView Logic
-БАЛАНСИРОВАННЫЕ НАСТРОЙКИ
+УСИЛЕННЫЕ НАСТРОЙКИ
 """
 
 import os
@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= БАЛАНСИРОВАННЫЕ НАСТРОЙКИ =========================
+# ========================= УСИЛЕННЫЕ НАСТРОЙКИ =========================
 
 # CORE
 RSI_LENGTH = 14
@@ -25,22 +25,22 @@ EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (БАЛАНС)
-RSI_PANIC_THRESHOLD = 35    # LONG при RSI <35
-RSI_FOMO_THRESHOLD = 65     # SHORT при RSI >65
+# THRESHOLDS (УСИЛЕНЫ)
+RSI_PANIC_THRESHOLD = 32    # Более строгий LONG
+RSI_FOMO_THRESHOLD = 68     # Более строгий SHORT
 RSI_MODE = "zone-hook"
 
-# FILTERS (БАЛАНС)
-USE_EMA_SIDE_FILTER = False
-USE_SLOPE_FILTER = False
-MIN_VOLUME_ZSCORE = -0.5
-REQUIRE_RETURN_BB = True    # ВКЛЮЧИТЬ возврат в BB
+# FILTERS (УСИЛЕНЫ)
+USE_EMA_SIDE_FILTER = True   # ВКЛЮЧИТЬ фильтр по EMA
+USE_SLOPE_FILTER = True      # ВКЛЮЧИТЬ фильтр по наклону
+MIN_VOLUME_ZSCORE = 0.0      # Объем ДОЛЖЕН быть выше среднего
+REQUIRE_RETURN_BB = True     # Строго требовать возврат в BB
 REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.35
+MIN_BODY_PCT = 0.40          # Более строгое тело свечи
 USE_HTF_CONFIRM = False
 
 POLL_INTERVAL_SEC = 25
-SIGNAL_COOLDOWN_MIN = 12
+SIGNAL_COOLDOWN_MIN = 15
 CHUNK_SIZE = 100
 
 # ========================= ИНДИКАТОРЫ =========================
@@ -110,10 +110,16 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
         volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # Фильтр объема
+        # Наклон EMA (разница за 3 периода)
+        ema_prev = calculate_ema(closes[:-3], EMA_LENGTH) if len(closes) > EMA_LENGTH + 3 else ema
+        ema_slope = ema - ema_prev
+        slope_up = ema_slope > 0
+        slope_down = ema_slope < 0
+
+        # Фильтр объема (УСИЛЕН)
         volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
 
-        # Фильтр свечи
+        # Фильтр свечи (УСИЛЕН)
         candle_range = max(current_high - current_low, 0.0001)
         body = abs(current_close - current_open)
         body_pct = body / candle_range
@@ -132,45 +138,51 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_rsi_trigger = long_rsi_cross or (RSI_MODE == "zone-hook" and long_rsi_hook)
         short_rsi_trigger = short_rsi_cross or (RSI_MODE == "zone-hook" and short_rsi_hook)
 
-        # BB триггеры
+        # BB триггеры (УСИЛЕНЫ - только возврат)
         prev_close = closes[-2] if len(closes) > 1 else current_close
         return_long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
         return_short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
 
-        long_bb_trigger = return_long_bb if REQUIRE_RETURN_BB else (current_low <= bb_lower)
-        short_bb_trigger = return_short_bb if REQUIRE_RETURN_BB else (current_high >= bb_upper)
+        long_bb_trigger = return_long_bb
+        short_bb_trigger = return_short_bb
 
         # Комбинированные триггеры
         long_raw_trigger = long_rsi_trigger or long_bb_trigger
         short_raw_trigger = short_rsi_trigger or short_bb_trigger
 
+        # Фильтры по EMA (УСИЛЕНЫ)
+        long_side_ok = (not USE_EMA_SIDE_FILTER) or (current_close >= ema)
+        short_side_ok = (not USE_EMA_SIDE_FILTER) or (current_close <= ema)
+        
+        long_trend_ok = (not USE_SLOPE_FILTER) or slope_up
+        short_trend_ok = (not USE_SLOPE_FILTER) or slope_down
+
         # Подтверждение свечой
         candle_pass_long = REQUIRE_CANDLE_CONFIRM and bull_candle_ok
         candle_pass_short = REQUIRE_CANDLE_CONFIRM and bear_candle_ok
-        
-        if not REQUIRE_CANDLE_CONFIRM:
-            candle_pass_long = True
-            candle_pass_short = True
 
-        # Финальные сигналы
-        long_signal = (long_raw_trigger and candle_pass_long and volume_pass)
-        short_signal = (short_raw_trigger and candle_pass_short and volume_pass)
+        # Финальные сигналы (ВСЕ фильтры должны пройти)
+        long_signal = (long_raw_trigger and candle_pass_long and long_side_ok and 
+                      long_trend_ok and volume_pass)
+        
+        short_signal = (short_raw_trigger and candle_pass_short and short_side_ok and 
+                       short_trend_ok and volume_pass)
 
         if not long_signal and not short_signal:
             return None
 
         if long_signal:
             signal_type = "LONG"
-            confidence = 60 + min(rsi - RSI_PANIC_THRESHOLD, 30)
+            confidence = 70 + min(rsi - RSI_PANIC_THRESHOLD, 20)
             trigger_source = "RSI" if long_rsi_trigger else "BB"
         else:
             signal_type = "SHORT"
-            confidence = 60 + min(RSI_FOMO_THRESHOLD - rsi, 30)
+            confidence = 70 + min(RSI_FOMO_THRESHOLD - rsi, 20)
             trigger_source = "RSI" if short_rsi_trigger else "BB"
 
-        confidence = min(confidence, 90)
+        confidence = min(confidence, 95)
 
-        print(f"✅ {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f} | Объем Z={volume_zscore:.2f}")
+        print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
 
         return {
             "symbol": symbol,
@@ -211,22 +223,22 @@ def format_signal_message(signal: Dict) -> str:
         action = "SHORT"
     
     return (
-        f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
+        f"{emoji} <b>КАЧЕСТВЕННЫЙ {action}</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n\n"
-        f"<b>АНАЛИЗ:</b>\n"
+        f"<b>СТРОГИЙ АНАЛИЗ:</b>\n"
         f"• RSI: {signal['rsi']:.1f}\n"
         f"• BB: {signal['bb_lower']:.4f} - {signal['bb_upper']:.4f}\n"
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n"
         f"• Триггер: {signal['trigger']}\n\n"
-        f"<i>🎯 Балансированные настройки</i>"
+        f"<i>🎯 Усиленные фильтры - только качественные сигналы</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: БАЛАНСИРОВАННЫЕ НАСТРОЙКИ")
+    print("🚀 ЗАПУСК БОТА: УСИЛЕННЫЕ ФИЛЬТРЫ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -247,7 +259,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Балансированные настройки | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Усиленные фильтры | {total_symbols} монет")
 
     signal_count = 0
     chunk_index = 0
@@ -278,7 +290,7 @@ def main():
                     recent_signals[symbol] = now
                     send_telegram(format_signal_message(signal))
                     signal_count += 1
-                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol}")
+                    print(f"🔥 КАЧЕСТВЕННЫЙ СИГНАЛ #{signal_count}: {symbol}")
 
                 except Exception as e:
                     continue
