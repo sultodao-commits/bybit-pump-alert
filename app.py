@@ -266,28 +266,23 @@ def main():
 
     markets = exchange.load_markets()
     symbols = []
-    volatile_keywords = ["PEPE", "FLOKI", "BONK", "SHIB", "DOGE", "MEME", "BOME", "WIF", "POPCAT", "ORDI", "SATS"]
 
     for symbol, market in markets.items():
         try:
             if (market.get("type") == "swap" and market.get("linear") and
                 market.get("settle") == "USDT" and "USDT" in symbol and "/" in symbol):
-                if any(keyword in symbol for keyword in volatile_keywords):
-                    symbols.insert(0, symbol)
-                else:
-                    symbols.append(symbol)
-                if len(symbols) >= 160:
-                    break
+                symbols.append(symbol)
         except:
             continue
 
-    send_telegram("🤖 <b>Бот запущен</b>: TradingView логика с точными настройками из скриншотов")
+    print(f"🔍 Найдено монет для сканирования: {len(symbols)}")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Сканирование {len(symbols)} монет | TradingView логика")
 
     signal_count = 0
 
     while True:
         try:
-            print(f"\n⏱️ Сканирование... | Всего сигналов: {signal_count}")
+            print(f"\n⏱️ Сканирование {len(symbols)} монет... | Всего сигналов: {signal_count}")
 
             for symbol in symbols:
                 try:
