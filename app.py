@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - ОЧЕНЬ СТРОГИЕ ФИЛЬТРЫ
+Bybit Futures Signals Bot - СТРОГИЕ ФИЛЬТРЫ
 """
 
 import os
@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= ОЧЕНЬ СТРОГИЕ ФИЛЬТРЫ =========================
+# ========================= СТРОГИЕ ФИЛЬТРЫ =========================
 
 # CORE
 RSI_LENGTH = 14
@@ -25,19 +25,18 @@ BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
 # THRESHOLDS (СТРОГИЕ)
-RSI_PANIC_THRESHOLD = 32    # Чуть ослабил
-RSI_FOMO_THRESHOLD = 68     # Чуть ослабил
+RSI_PANIC_THRESHOLD = 35    # Ослабил до 35
+RSI_FOMO_THRESHOLD = 65     # Ослабил до 65
 
-# ФИЛЬТРЫ (ОЧЕНЬ СТРОГИЕ)
+# ФИЛЬТРЫ (СТРОГИЕ)
 USE_EMA_SIDE_FILTER = True
-USE_SLOPE_FILTER = True
-MIN_VOLUME_ZSCORE = 0.5     # Ослабил до 0.5
-MIN_BODY_PCT = 0.40         # Ослабил до 40%
+USE_SLOPE_FILTER = False    # ВЫКЛЮЧИЛ наклон EMA
+MIN_VOLUME_ZSCORE = 0.2     # Ослабил до 0.2
+MIN_BODY_PCT = 0.35         # Ослабил до 35%
 REQUIRE_RETURN_BB = True
-REQUIRE_BOTH_TRIGGERS = False  # ОСЛАБИЛ - RSI ИЛИ BB
 
-POLL_INTERVAL_SEC = 30
-SIGNAL_COOLDOWN_MIN = 20    # Ослабил до 20 минут
+POLL_INTERVAL_SEC = 25
+SIGNAL_COOLDOWN_MIN = 15    # Ослабил до 15 минут
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -86,7 +85,7 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
 
 def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
-        if len(ohlcv) < 25:
+        if len(ohlcv) < 20:
             return None
 
         closes = [float(c[4]) for c in ohlcv]
@@ -107,13 +106,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
         volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # Наклон EMA
-        ema_prev = calculate_ema(closes[:-3], EMA_LENGTH) if len(closes) > EMA_LENGTH + 3 else ema
-        ema_slope = ema - ema_prev
-        slope_up = ema_slope > 0
-        slope_down = ema_slope < 0
-        
-        # ОЧЕНЬ СТРОГИЕ ФИЛЬТРЫ
+        # СТРОГИЕ ФИЛЬТРЫ
         volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
         
         candle_range = max(current_high - current_low, 0.0001)
@@ -122,11 +115,9 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
         bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
         
-        # Фильтры EMA
+        # Фильтр EMA (только сторона)
         ema_side_ok_long = (not USE_EMA_SIDE_FILTER) or (current_close >= ema)
         ema_side_ok_short = (not USE_EMA_SIDE_FILTER) or (current_close <= ema)
-        ema_slope_ok_long = (not USE_SLOPE_FILTER) or slope_up
-        ema_slope_ok_short = (not USE_SLOPE_FILTER) or slope_down
 
         # Условия RSI
         long_rsi = rsi < RSI_PANIC_THRESHOLD
@@ -136,19 +127,19 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
         short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
 
-        # ОЧЕНЬ СТРОГАЯ ЛОГИКА (НО не максимальная)
-        long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass and ema_side_ok_long and ema_slope_ok_long
-        short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass and ema_side_ok_short and ema_slope_ok_short
+        # СТРОГАЯ ЛОГИКА
+        long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass and ema_side_ok_long
+        short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass and ema_side_ok_short
 
         if not long_signal and not short_signal:
             return None
 
         if long_signal:
             signal_type = "LONG"
-            confidence = 80
+            confidence = 75
         else:
             signal_type = "SHORT"
-            confidence = 80
+            confidence = 75
 
         print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
 
@@ -189,20 +180,20 @@ def format_signal_message(signal: Dict) -> str:
         action = "SHORT"
     
     return (
-        f"{emoji} <b>КАЧЕСТВЕННЫЙ {action}</b>\n\n"
+        f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n\n"
-        f"<b>СТРОГИЙ АНАЛИЗ:</b>\n"
+        f"<b>АНАЛИЗ:</b>\n"
         f"• RSI: {signal['rsi']:.1f}\n"
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n\n"
-        f"<i>🎯 Очень строгие фильтры</i>"
+        f"<i>🎯 Строгие фильтры</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ОЧЕНЬ СТРОГИЕ ФИЛЬТРЫ")
+    print("🚀 ЗАПУСК БОТА: СТРОГИЕ ФИЛЬТРЫ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -223,7 +214,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Очень строгие фильтры | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Строгие фильтры | {total_symbols} монет")
 
     signal_count = 0
 
@@ -233,8 +224,8 @@ def main():
 
             for symbol in symbols:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=25)
-                    if not ohlcv or len(ohlcv) < 20:
+                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=20)
+                    if not ohlcv or len(ohlcv) < 15:
                         continue
 
                     signal = analyze_tv_signals(symbol, ohlcv)
@@ -248,7 +239,7 @@ def main():
                     recent_signals[symbol] = now
                     send_telegram(format_signal_message(signal))
                     signal_count += 1
-                    print(f"🔥 КАЧЕСТВЕННЫЙ СИГНАЛ #{signal_count}: {symbol}")
+                    print(f"🔥 СИГНАЛ #{signal_count}: {symbol}")
 
                 except Exception as e:
                     continue
