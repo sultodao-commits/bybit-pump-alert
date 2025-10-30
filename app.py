@@ -43,6 +43,7 @@ USE_HTF_CONFIRM = False       # Use HTF trend confirm (EMA) - ВЫКЛЮЧЕНО
 
 POLL_INTERVAL_SEC = 25
 SIGNAL_COOLDOWN_MIN = 18
+CHUNK_SIZE = 100  # Дробим сканирование на части по 100 монет
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -275,16 +276,24 @@ def main():
         except:
             continue
 
-    print(f"🔍 Найдено монет для сканирования: {len(symbols)}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Сканирование {len(symbols)} монет | TradingView логика")
+    total_symbols = len(symbols)
+    print(f"🔍 Найдено монет для сканирования: {total_symbols}")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Сканирование {total_symbols} монет (чанками по {CHUNK_SIZE}) | TradingView логика")
 
     signal_count = 0
+    chunk_index = 0
 
     while True:
         try:
-            print(f"\n⏱️ Сканирование {len(symbols)} монет... | Всего сигналов: {signal_count}")
+            # Делим на чанки
+            total_chunks = (total_symbols + CHUNK_SIZE - 1) // CHUNK_SIZE
+            start_idx = chunk_index * CHUNK_SIZE
+            end_idx = min((chunk_index + 1) * CHUNK_SIZE, total_symbols)
+            current_chunk = symbols[start_idx:end_idx]
+            
+            print(f"\n⏱️ Сканирование чанка {chunk_index + 1}/{total_chunks} ({len(current_chunk)} монет)... | Всего сигналов: {signal_count}")
 
-            for symbol in symbols:
+            for symbol in current_chunk:
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=50)
                     if not ohlcv or len(ohlcv) < 30:
@@ -308,6 +317,9 @@ def main():
                     print(f"Ошибка {symbol}: {e}")
                     continue
 
+            # Переходим к следующему чанку
+            chunk_index = (chunk_index + 1) % total_chunks
+            
             # Очистка старых сигналов
             now = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() if now - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
