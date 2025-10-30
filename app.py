@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - STRICT 5M BURST
-Всплески ≥10% за 5 минут
-Без входов, стопов и отката от пика
+Bybit Futures Signals Bot - TradingView Logic
+LONG/SHORT signals based on RSI + Bollinger Bands
+Точные настройки из скриншотов
 """
 
 import os
 import time
 import requests
 import ccxt
+import numpy as np
 from typing import List, Dict, Any, Optional
 
 # ========================= НАСТРОЙКИ =========================
@@ -17,14 +18,36 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-MIN_PUMP_STRENGTH = 10.0       # Всплеск ≥10% за 5 минут
-MIN_RSI = 65                   # RSI ≥65
-POLL_INTERVAL_SEC = 25         # Интервал проверки
-SIGNAL_COOLDOWN_MIN = 18       # Кулдаун 18 мин
+# ========================= ТОЧНЫЕ НАСТРОЙКИ ИЗ СКРИНШОТОВ =========================
 
-# ========================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =========================
+# CORE (из IMG_1514.jpeg)
+RSI_LENGTH = 14
+EMA_LENGTH = 50
+BB_LENGTH = 20
+BB_MULTIPLIER = 1.8
 
-def calculate_accurate_rsi(prices: List[float], period: int = 14) -> float:
+# THRESHOLDS (из IMG_1514.jpeg)
+RSI_PANIC_THRESHOLD = 35    # Panic Threshold
+RSI_FOMO_THRESHOLD = 65     # FOMO-Up Threshold
+RSI_MODE = "zone-hook"      # RSI Trigger Mode
+
+# SIGNALS & FILTERS (из IMG_1514.jpeg и IMG_1515.jpeg)
+USE_EMA_SIDE_FILTER = False   # Filter: side vs EMA - ВЫКЛЮЧЕН
+USE_SLOPE_FILTER = False      # Filter: EMA slope - ВЫКЛЮЧЕН
+COOLDOWN_BARS = 5             # Cooldown bars after signal
+MIN_VOLUME_ZSCORE = -0.5      # Min volume z-score
+REQUIRE_RETURN_BB = True      # Require return inside BB - ВКЛЮЧЕНО
+REQUIRE_CANDLE_CONFIRM = True # Require candle confirmation - ВКЛЮЧЕНО
+MIN_BODY_PCT = 0.45           # Min body / range (0..1)
+USE_HTF_CONFIRM = False       # Use HTF trend confirm (EMA) - ВЫКЛЮЧЕНО
+
+POLL_INTERVAL_SEC = 25
+SIGNAL_COOLDOWN_MIN = 18
+
+# ========================= ИНДИКАТОРЫ =========================
+
+def calculate_rsi(prices: List[float], period: int = 14) -> float:
+    """Расчет RSI"""
     if len(prices) < period + 1:
         return 50.0
     deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
@@ -38,37 +61,156 @@ def calculate_accurate_rsi(prices: List[float], period: int = 14) -> float:
     rsi = 100 - (100 / (1 + rs))
     return min(max(rsi, 0), 100)
 
-def analyze_burst_signal(symbol: str, ohlcv: List, ticker: Dict) -> Optional[Dict[str, Any]]:
+def calculate_ema(prices: List[float], period: int) -> float:
+    """Расчет EMA"""
+    if len(prices) < period:
+        return prices[-1] if prices else 0
+    weights = np.exp(np.linspace(-1., 0., period))
+    weights /= weights.sum()
+    return np.convolve(prices[-period:], weights, mode='valid')[-1]
+
+def calculate_bollinger_bands(prices: List[float], period: int, mult: float) -> tuple:
+    """Расчет полос Боллинджера"""
+    if len(prices) < period:
+        basis = prices[-1] if prices else 0
+        return basis, basis, basis
+    
+    basis = np.mean(prices[-period:])
+    dev = mult * np.std(prices[-period:])
+    upper = basis + dev
+    lower = basis - dev
+    return basis, upper, lower
+
+def calculate_volume_zscore(volumes: List[float], period: int) -> float:
+    """Расчет Z-score объема"""
+    if len(volumes) < period:
+        return 0.0
+    recent_volumes = volumes[-period:]
+    mean_vol = np.mean(recent_volumes)
+    std_vol = np.std(recent_volumes)
+    if std_vol == 0:
+        return 0.0
+    return (volumes[-1] - mean_vol) / std_vol
+
+# ========================= ЛОГИКА СИГНАЛОВ =========================
+
+def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
-        if len(ohlcv) < 5:
+        if len(ohlcv) < max(RSI_LENGTH, EMA_LENGTH, BB_LENGTH) + 5:
             return None
 
-        current = ohlcv[-1]
-        current_close = float(current[4])
-        current_open = float(current[1])
-        current_high = float(current[2])
-        current_low = float(current[3])
+        # Извлекаем данные
+        closes = [float(c[4]) for c in ohlcv]
+        opens = [float(c[1]) for c in ohlcv]
+        highs = [float(c[2]) for c in ohlcv]
+        lows = [float(c[3]) for c in ohlcv]
+        volumes = [float(c[5]) for c in ohlcv]
 
-        # === Всплеск за 5 минут (последняя свеча) ===
-        pump_5min = (current_high - current_low) / current_low * 100 if current_low > 0 else 0.0
-        if pump_5min < MIN_PUMP_STRENGTH:
+        current_close = closes[-1]
+        current_open = opens[-1]
+        current_high = highs[-1]
+        current_low = lows[-1]
+        current_volume = volumes[-1]
+
+        # Рассчитываем индикаторы
+        rsi = calculate_rsi(closes, RSI_LENGTH)
+        ema = calculate_ema(closes, EMA_LENGTH)
+        basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
+        volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
+        
+        # Наклон EMA (разница за 3 периода)
+        ema_slope = ema - calculate_ema(closes[:-3], EMA_LENGTH) if len(closes) > EMA_LENGTH + 3 else 0
+        slope_up = ema_slope > 0
+        slope_down = ema_slope < 0
+
+        # Проверка объема
+        volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
+
+        # Проверка свечи
+        candle_range = max(current_high - current_low, 0.0001)
+        body = abs(current_close - current_open)
+        body_pct = body / candle_range
+        bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
+        bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
+
+        # Триггеры RSI в режиме zone-hook
+        prev_rsi = calculate_rsi(closes[:-1], RSI_LENGTH) if len(closes) > RSI_LENGTH + 1 else 50
+        
+        # RSI zone-hook логика (как в TradingView)
+        long_rsi_cross = (prev_rsi < RSI_PANIC_THRESHOLD) and (rsi > RSI_PANIC_THRESHOLD)
+        short_rsi_cross = (prev_rsi > RSI_FOMO_THRESHOLD) and (rsi < RSI_FOMO_THRESHOLD)
+        
+        long_rsi_hook = (rsi < RSI_PANIC_THRESHOLD) and (rsi > prev_rsi)
+        short_rsi_hook = (rsi > RSI_FOMO_THRESHOLD) and (rsi < prev_rsi)
+        
+        long_rsi_trigger = long_rsi_cross or (RSI_MODE == "zone-hook" and long_rsi_hook)
+        short_rsi_trigger = short_rsi_cross or (RSI_MODE == "zone-hook" and short_rsi_hook)
+
+        # Триггеры Боллинджера
+        prev_close = closes[-2] if len(closes) > 1 else current_close
+        touch_low = (current_close <= bb_lower) or (current_low <= bb_lower)
+        touch_high = (current_close >= bb_upper) or (current_high >= bb_upper)
+        
+        return_long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
+        return_short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
+
+        long_bb_trigger = return_long_bb if REQUIRE_RETURN_BB else touch_low
+        short_bb_trigger = return_short_bb if REQUIRE_RETURN_BB else touch_high
+
+        # Комбинированные триггеры
+        long_raw_trigger = long_rsi_trigger or long_bb_trigger
+        short_raw_trigger = short_rsi_trigger or short_bb_trigger
+
+        # Фильтры (ВЫКЛЮЧЕНЫ согласно скриншотам)
+        long_side_ok = (not USE_EMA_SIDE_FILTER) or (current_close >= ema)
+        short_side_ok = (not USE_EMA_SIDE_FILTER) or (current_close <= ema)
+        
+        long_trend_ok = (not USE_SLOPE_FILTER) or slope_up
+        short_trend_ok = (not USE_SLOPE_FILTER) or slope_down
+
+        # Подтверждение свечой (ВКЛЮЧЕНО)
+        candle_pass_long = REQUIRE_CANDLE_CONFIRM and bull_candle_ok
+        candle_pass_short = REQUIRE_CANDLE_CONFIRM and bear_candle_ok
+        
+        # Если подтверждение свечой выключено - пропускаем проверку
+        if not REQUIRE_CANDLE_CONFIRM:
+            candle_pass_long = True
+            candle_pass_short = True
+
+        # Финальные сигналы
+        long_signal = (long_raw_trigger and candle_pass_long and long_side_ok and 
+                      long_trend_ok and volume_pass)
+        
+        short_signal = (short_raw_trigger and candle_pass_short and short_side_ok and 
+                       short_trend_ok and volume_pass)
+
+        if not long_signal and not short_signal:
             return None
 
-        # === RSI ===
-        closes = [float(x[4]) for x in ohlcv]
-        rsi_value = calculate_accurate_rsi(closes)
-        if rsi_value < MIN_RSI:
-            return None
+        # Определяем тип сигнала и уверенность
+        if long_signal:
+            signal_type = "LONG"
+            confidence = 60 + min(rsi - RSI_PANIC_THRESHOLD, 30)
+            trigger_source = "RSI" if long_rsi_trigger else "BB"
+        else:
+            signal_type = "SHORT"
+            confidence = 60 + min(RSI_FOMO_THRESHOLD - rsi, 30)
+            trigger_source = "RSI" if short_rsi_trigger else "BB"
 
-        confidence = 60 + (pump_5min / 2)
         confidence = min(confidence, 90)
 
-        print(f"✅ {symbol}: всплеск_5м={pump_5min:.1f}%, RSI={rsi_value:.1f}")
+        print(f"✅ {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f} | Объем Z={volume_zscore:.2f}")
 
         return {
             "symbol": symbol,
-            "pump_5min": pump_5min,
-            "rsi": rsi_value,
+            "type": signal_type,
+            "rsi": rsi,
+            "ema": ema,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "volume_zscore": volume_zscore,
+            "body_pct": body_pct,
+            "trigger": trigger_source,
             "confidence": confidence,
             "timestamp": time.time()
         }
@@ -90,20 +232,31 @@ def send_telegram(text: str):
         pass
 
 def format_signal_message(signal: Dict) -> str:
+    if signal["type"] == "LONG":
+        emoji = "🟢"
+        action = "LONG"
+    else:
+        emoji = "🔴"
+        action = "SHORT"
+    
     return (
-        f"🚀 <b>СТРОГИЙ СИГНАЛ: ВСПЛЕСК ≥10% / 5м</b>\n\n"
+        f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n\n"
         f"<b>АНАЛИЗ:</b>\n"
-        f"• Всплеск (5м): {signal['pump_5min']:.2f}% ⚡\n"
-        f"• RSI: {signal['rsi']:.1f}\n\n"
-        f"<i>🎯 Короткий сильный импульс.</i>"
+        f"• RSI: {signal['rsi']:.1f}\n"
+        f"• EMA50: {signal['ema']:.4f}\n"
+        f"• BB: {signal['bb_lower']:.4f} - {signal['bb_upper']:.4f}\n"
+        f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
+        f"• Тело свечи: {signal['body_pct']:.1%}\n"
+        f"• Триггер: {signal['trigger']}\n\n"
+        f"<i>🎯 Сигнал по стратегии RSI + Bollinger Bands</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ВСПЛЕСК ≥10% ЗА 5 МИНУТ, RSI ≥65")
+    print("🚀 ЗАПУСК БОТА: TradingView Logic (Точные настройки из скриншотов)")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -128,7 +281,7 @@ def main():
         except:
             continue
 
-    send_telegram("🤖 <b>Бот запущен</b>: фильтр всплески ≥10% / 5м, RSI ≥65. Без ограничений по сигналам.")
+    send_telegram("🤖 <b>Бот запущен</b>: TradingView логика с точными настройками из скриншотов")
 
     signal_count = 0
 
@@ -138,12 +291,11 @@ def main():
 
             for symbol in symbols:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=10)
-                    ticker = exchange.fetch_ticker(symbol)
-                    if not ohlcv or len(ohlcv) < 5:
+                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=50)
+                    if not ohlcv or len(ohlcv) < 30:
                         continue
 
-                    signal = analyze_burst_signal(symbol, ohlcv, ticker)
+                    signal = analyze_tv_signals(symbol, ohlcv)
                     if not signal:
                         continue
 
@@ -155,13 +307,13 @@ def main():
                     recent_signals[symbol] = now
                     send_telegram(format_signal_message(signal))
                     signal_count += 1
-                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol}")
+                    print(f"🎯 {signal['type']} СИГНАЛ #{signal_count}: {symbol}")
 
                 except Exception as e:
                     print(f"Ошибка {symbol}: {e}")
                     continue
 
-            # Очистка старых сигналов из recent_signals (кулдаун)
+            # Очистка старых сигналов
             now = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() if now - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
 
