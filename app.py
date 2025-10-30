@@ -3,7 +3,7 @@
 """
 Bybit Futures Signals Bot - TradingView Logic
 LONG/SHORT signals based on RSI + Bollinger Bands
-Точные настройки из скриншотов
+15-минутный таймфрейм + ослабленные фильтры
 """
 
 import os
@@ -18,27 +18,27 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= ТОЧНЫЕ НАСТРОЙКИ ИЗ СКРИНШОТОВ =========================
+# ========================= ОСЛАБЛЕННЫЕ НАСТРОЙКИ =========================
 
-# CORE (из IMG_1514.jpeg)
+# CORE
 RSI_LENGTH = 14
 EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (из IMG_1514.jpeg)
-RSI_PANIC_THRESHOLD = 35    # Panic Threshold
-RSI_FOMO_THRESHOLD = 65     # FOMO-Up Threshold
+# THRESHOLDS (ОСЛАБЛЕНЫ)
+RSI_PANIC_THRESHOLD = 40    # Было 35 - LONG при RSI <40
+RSI_FOMO_THRESHOLD = 60     # Было 65 - SHORT при RSI >60
 RSI_MODE = "zone-hook"      # RSI Trigger Mode
 
-# SIGNALS & FILTERS (из IMG_1514.jpeg и IMG_1515.jpeg)
+# SIGNALS & FILTERS (ОСЛАБЛЕНЫ)
 USE_EMA_SIDE_FILTER = False   # Filter: side vs EMA - ВЫКЛЮЧЕН
 USE_SLOPE_FILTER = False      # Filter: EMA slope - ВЫКЛЮЧЕН
 COOLDOWN_BARS = 5             # Cooldown bars after signal
-MIN_VOLUME_ZSCORE = -0.5      # Min volume z-score
-REQUIRE_RETURN_BB = True      # Require return inside BB - ВКЛЮЧЕНО
+MIN_VOLUME_ZSCORE = -1.0      # Было -0.5 - мягче фильтр объема
+REQUIRE_RETURN_BB = False     # Было True - сигнал при касании BB
 REQUIRE_CANDLE_CONFIRM = True # Require candle confirmation - ВКЛЮЧЕНО
-MIN_BODY_PCT = 0.45           # Min body / range (0..1)
+MIN_BODY_PCT = 0.30           # Было 0.45 - тело свечи ≥30%
 USE_HTF_CONFIRM = False       # Use HTF trend confirm (EMA) - ВЫКЛЮЧЕНО
 
 POLL_INTERVAL_SEC = 25
@@ -147,7 +147,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_rsi_trigger = long_rsi_cross or (RSI_MODE == "zone-hook" and long_rsi_hook)
         short_rsi_trigger = short_rsi_cross or (RSI_MODE == "zone-hook" and short_rsi_hook)
 
-        # Триггеры Боллинджера
+        # Триггеры Боллинджера (ОСЛАБЛЕНЫ - касание вместо возврата)
         prev_close = closes[-2] if len(closes) > 1 else current_close
         touch_low = (current_close <= bb_lower) or (current_low <= bb_lower)
         touch_high = (current_close >= bb_upper) or (current_high >= bb_upper)
@@ -257,7 +257,7 @@ def format_signal_message(signal: Dict) -> str:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: TradingView Logic (Точные настройки из скриншотов)")
+    print("🚀 ЗАПУСК БОТА: TradingView Logic (15м + ослабленные фильтры)")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -278,7 +278,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет для сканирования: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Сканирование {total_symbols} монет (чанками по {CHUNK_SIZE}) | TradingView логика")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Сканирование {total_symbols} монет (15м ТФ) | Ослабленные фильтры")
 
     signal_count = 0
     chunk_index = 0
@@ -295,7 +295,8 @@ def main():
 
             for symbol in current_chunk:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=50)
+                    # 15-МИНУТНЫЙ ТАЙМФРЕЙМ
+                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=50)
                     if not ohlcv or len(ohlcv) < 30:
                         continue
 
