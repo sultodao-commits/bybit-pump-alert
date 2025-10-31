@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - ОСЛАБЛЕННЫЕ НАСТРОЙКИ TradingView
+Bybit Futures Signals Bot - МЯГКИЕ НАСТРОЙКИ
 """
 
 import os
@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= ОСЛАБЛЕННЫЕ НАСТРОЙКИ =========================
+# ========================= МЯГКИЕ НАСТРОЙКИ =========================
 
 # CORE 
 RSI_LENGTH = 14
@@ -24,21 +24,21 @@ EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (ОСЛАБЛЕНЫ)
-RSI_PANIC_THRESHOLD = 38    # Было 35
-RSI_FOMO_THRESHOLD = 62     # Было 65
+# THRESHOLDS (МЯГКИЕ)
+RSI_PANIC_THRESHOLD = 40    # Было 38
+RSI_FOMO_THRESHOLD = 60     # Было 62
 RSI_MODE = "zone-hook"
 
-# FILTERS (ОСЛАБЛЕНЫ)
+# FILTERS (МЯГКИЕ)
 USE_EMA_SIDE_FILTER = False
 USE_SLOPE_FILTER = False
-MIN_VOLUME_ZSCORE = -0.8    # Было -0.5
+MIN_VOLUME_ZSCORE = -1.0    # Было -0.8
 REQUIRE_RETURN_BB = True
 REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.35         # Было 0.45
+MIN_BODY_PCT = 0.30         # Было 0.35
 
-POLL_INTERVAL_SEC = 30
-SIGNAL_COOLDOWN_MIN = 10    # Было 15
+POLL_INTERVAL_SEC = 25
+SIGNAL_COOLDOWN_MIN = 8     # Было 10
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -107,10 +107,10 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
         volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # Фильтр объема (ОСЛАБЛЕН)
+        # Фильтр объема (МЯГКИЙ)
         volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
 
-        # Фильтр свечи (ОСЛАБЛЕН)
+        # Фильтр свечи (МЯГКИЙ)
         candle_range = max(current_high - current_low, 0.0001)
         body = abs(current_close - current_open)
         body_pct = body / candle_range
@@ -155,11 +155,11 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
 
         if long_signal:
             signal_type = "LONG"
-            confidence = 70
+            confidence = 65
             trigger_source = "RSI" if long_rsi_trigger else "BB"
         else:
             signal_type = "SHORT"
-            confidence = 70
+            confidence = 65
             trigger_source = "RSI" if short_rsi_trigger else "BB"
 
         print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | BB={bb_lower:.4f}-{bb_upper:.4f} | Объем Z={volume_zscore:.2f}")
@@ -211,13 +211,13 @@ def format_signal_message(signal: Dict) -> str:
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n"
         f"• Триггер: {signal['trigger']}\n\n"
-        f"<i>🎯 Ослабленные настройки</i>"
+        f"<i>🎯 Мягкие настройки</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ОСЛАБЛЕННЫЕ НАСТРОЙКИ")
+    print("🚀 ЗАПУСК БОТА: МЯГКИЕ НАСТРОЙКИ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -238,7 +238,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Ослабленные настройки | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Мягкие настройки | {total_symbols} монет")
 
     signal_count = 0
 
