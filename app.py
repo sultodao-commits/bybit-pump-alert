@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - МЯГЧЕ ЧЕМ TRADINGVIEW
+Bybit Futures Signals Bot - ОПТИМАЛЬНЫЕ РАБОЧИЕ НАСТРОЙКИ
 """
 
 import os
@@ -16,29 +16,29 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= МЯГЧЕ ЧЕМ TRADINGVIEW =========================
+# ========================= ОПТИМАЛЬНЫЕ РАБОЧИЕ НАСТРОЙКИ =========================
 
-# CORE (как в TradingView)
+# CORE 
 RSI_LENGTH = 14
 EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (МЯГЧЕ чем TradingView)
-RSI_PANIC_THRESHOLD = 38    # TradingView: 35
-RSI_FOMO_THRESHOLD = 62     # TradingView: 65
+# THRESHOLDS (ОПТИМАЛЬНЫЕ)
+RSI_PANIC_THRESHOLD = 40    # Хороший баланс
+RSI_FOMO_THRESHOLD = 60     # Хороший баланс
 RSI_MODE = "zone-hook"
 
-# FILTERS (МЯГЧЕ чем TradingView)
-USE_EMA_SIDE_FILTER = False   # TradingView: False
-USE_SLOPE_FILTER = False      # TradingView: False
-MIN_VOLUME_ZSCORE = -0.8      # TradingView: -0.5 (мягче)
-MIN_BODY_PCT = 0.30           # TradingView: 0.45 (мягче)
-REQUIRE_RETURN_BB = True      # TradingView: True
-REQUIRE_CANDLE_CONFIRM = True # TradingView: True
+# FILTERS (ОПТИМАЛЬНЫЕ)
+USE_EMA_SIDE_FILTER = False
+USE_SLOPE_FILTER = False
+MIN_VOLUME_ZSCORE = -1.0    # Мягкий объем
+REQUIRE_RETURN_BB = False   # Касания BB
+REQUIRE_CANDLE_CONFIRM = True
+MIN_BODY_PCT = 0.25         # Реалистичное тело
 
 POLL_INTERVAL_SEC = 25
-SIGNAL_COOLDOWN_MIN = 10      # TradingView: 5 баров
+SIGNAL_COOLDOWN_MIN = 8     # Оптимальный кулдаун
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -107,7 +107,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
         volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # ФИЛЬТРЫ МЯГЧЕ чем TradingView
+        # ФИЛЬТРЫ
         volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
 
         candle_range = max(current_high - current_low, 0.0001)
@@ -116,7 +116,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
         bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
 
-        # Триггеры RSI zone-hook
+        # Триггеры RSI
         prev_rsi = calculate_rsi(closes[:-1], RSI_LENGTH) if len(closes) > RSI_LENGTH + 1 else 50
         
         long_rsi_cross = (prev_rsi < RSI_PANIC_THRESHOLD) and (rsi > RSI_PANIC_THRESHOLD)
@@ -129,12 +129,8 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         short_rsi_trigger = short_rsi_cross or (RSI_MODE == "zone-hook" and short_rsi_hook)
 
         # Триггеры Боллинджера
-        prev_close = closes[-2] if len(closes) > 1 else current_close
-        return_long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
-        return_short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
-
-        long_bb_trigger = return_long_bb if REQUIRE_RETURN_BB else (current_low <= bb_lower)
-        short_bb_trigger = return_short_bb if REQUIRE_RETURN_BB else (current_high >= bb_upper)
+        long_bb_trigger = current_low <= bb_lower
+        short_bb_trigger = current_high >= bb_upper
 
         # Комбинированные триггеры
         long_raw_trigger = long_rsi_trigger or long_bb_trigger
@@ -144,7 +140,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         candle_pass_long = REQUIRE_CANDLE_CONFIRM and bull_candle_ok
         candle_pass_short = REQUIRE_CANDLE_CONFIRM and bear_candle_ok
 
-        # Финальные сигналы (ВСЕ фильтры мягче)
+        # Финальные сигналы
         long_signal = (long_raw_trigger and candle_pass_long and volume_pass)
         short_signal = (short_raw_trigger and candle_pass_short and volume_pass)
 
@@ -209,13 +205,13 @@ def format_signal_message(signal: Dict) -> str:
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n"
         f"• Триггер: {signal['trigger']}\n\n"
-        f"<i>🎯 Мягче чем TradingView</i>"
+        f"<i>🎯 Оптимальные настройки</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: МЯГЧЕ ЧЕМ TRADINGVIEW")
+    print("🚀 ЗАПУСК БОТА: ОПТИМАЛЬНЫЕ РАБОЧИЕ НАСТРОЙКИ")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -236,7 +232,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Мягче чем TradingView | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Оптимальные настройки | {total_symbols} монет")
 
     signal_count = 0
 
