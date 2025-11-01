@@ -177,27 +177,15 @@ def send_telegram(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        arrows = "↗️" * 8
-        emoji = "🎯"
+        arrows = "↗️" * 8  # 8 стрелок вверх
     else:
-        arrows = "↘️" * 8
-        emoji = "🎯"
+        arrows = "↘️" * 8  # 8 стрелок вниз
     
     # Извлекаем только название тикера (убираем /USDT)
     symbol_parts = signal['symbol'].split('/')
     ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
-    triggers_text = "+".join(signal['triggers'])
-    
-    return (
-        f"{arrows}\n\n"
-        f"<b>{emoji} {ticker} {signal['type']}</b>\n"
-        f"<b>Уверенность: {signal['confidence']}%</b>\n"
-        f"Триггеры: {triggers_text}\n"
-        f"RSI: {signal['rsi']:.1f} | Объем: Z={signal['volume_zscore']:.2f}\n"
-        f"Тело свечи: {signal['body_pct']:.1%}\n"
-        f"BB: {signal['bb_lower']:.4f} | {signal['bb_upper']:.4f}"
-    )
+    return f"{arrows}\n\n<b>{ticker}</b>"
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
@@ -223,7 +211,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот |  {total_symbols}")
+    send_telegram(f"🤖 Бот запущен | {total_symbols} монет | Строгая логика RSI+BB")
 
     signal_count = 0
 
