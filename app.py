@@ -189,17 +189,19 @@ def send_telegram(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        emoji = "🟢"
         arrows = "↗️" * 8  # 8 стрелок вверх
     else:
-        emoji = "🔴" 
         arrows = "↘️" * 8  # 8 стрелок вниз
+    
+    # Извлекаем только название тикера (убираем /USDT)
+    symbol_parts = signal['symbol'].split('/')
+    ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
     triggers_text = "+".join(signal['triggers'])
     
     return (
-        f"{emoji} {arrows}\n\n"
-        f"<b>{signal['symbol']}</b>\n"
+        f"{arrows}\n\n"
+        f"<b>{ticker}</b>\n"
         f"<b>{signal['confidence']}%</b> | {triggers_text}"
     )
 
@@ -254,8 +256,8 @@ def main():
 
                     # СОХРАНЯЕМ ВРЕМЯ СИГНАЛА
                     recent_signals[symbol] = current_time
-                    send_telegram(format_signal_message(signal))
                     signal_count += 1
+                    send_telegram(format_signal_message(signal))
                     print(f"🎯 СИГНАЛ #{signal_count}: {symbol} | Триггеры: {'+'.join(signal['triggers'])} | Следующий сигнал через 7 часов")
 
                 except Exception as e:
