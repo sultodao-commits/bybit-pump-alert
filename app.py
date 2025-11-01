@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Signals Bot - СТРОГАЯ ЛОГИКА RSI + BB (ОБА УСЛОВИЯ)
+Для любого пользователя Telegram
 """
 
 import os
@@ -14,7 +15,7 @@ from typing import List, Dict, Any, Optional
 # ========================= НАСТРОЙКИ =========================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# TELEGRAM_CHAT_ID больше не нужен - бот будет работать в любом чате
 
 # ========================= СТРОГИЕ НАСТРОЙКИ =========================
 
@@ -81,6 +82,74 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
     if std_vol == 0:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
+
+# ========================= TELEGRAM ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ =========================
+
+def get_chat_id_from_bot():
+    """Получаем chat_id из последнего сообщения к боту"""
+    if not TELEGRAM_BOT_TOKEN:
+        return None
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('ok') and data.get('result'):
+                # Берем последний чат, где боту писали
+                last_update = data['result'][-1]
+                chat_id = last_update['message']['chat']['id']
+                print(f"✅ Найден chat_id: {chat_id}")
+                return str(chat_id)
+    except Exception as e:
+        print(f"❌ Ошибка получения chat_id: {e}")
+    return None
+
+def send_telegram_to_all(text: str):
+    """Отправляет сообщение во все чаты, где есть бот"""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ TELEGRAM_BOT_TOKEN не указан. Сообщения не отправляются.")
+        return
+        
+    # Получаем все чаты из обновлений
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('ok') and data.get('result'):
+                sent_chats = set()
+                for update in data['result']:
+                    if 'message' in update:
+                        chat_id = update['message']['chat']['id']
+                        if chat_id not in sent_chats:
+                            sent_chats.add(chat_id)
+                            # Отправляем сообщение в каждый чат
+                            send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                            payload = {
+                                "chat_id": chat_id, 
+                                "text": text, 
+                                "parse_mode": "HTML"
+                            }
+                            try:
+                                requests.post(send_url, json=payload, timeout=5)
+                                print(f"✅ Сообщение отправлено в чат: {chat_id}")
+                            except:
+                                print(f"❌ Ошибка отправки в чат: {chat_id}")
+    except Exception as e:
+        print(f"❌ Ошибка отправки сообщений: {e}")
+
+def format_signal_message(signal: Dict) -> str:
+    if signal["type"] == "LONG":
+        arrows = "↗️" * 8  # 8 стрелок вверх
+    else:
+        arrows = "↘️" * 8  # 8 стрелок вниз
+    
+    # Извлекаем только название тикера (убираем /USDT)
+    symbol_parts = signal['symbol'].split('/')
+    ticker = symbol_parts[0] if symbol_parts else signal['symbol']
+    
+    return f"{arrows}\n\n<b>{ticker}</b>"
 
 # ========================= СТРОГАЯ ЛОГИКА СИГНАЛОВ (ОБА УСЛОВИЯ) =========================
 
@@ -163,37 +232,18 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         print(f"❌ Ошибка анализа {symbol}: {e}")
         return None
 
-# ========================= TELEGRAM =========================
-
-def send_telegram(text: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except:
-        pass
-
-def format_signal_message(signal: Dict) -> str:
-    if signal["type"] == "LONG":
-        arrows = "↗️" * 8  # 8 стрелок вверх
-    else:
-        arrows = "↘️" * 8  # 8 стрелок вниз
-    
-    # Извлекаем только название тикера (убираем /USDT)
-    symbol_parts = signal['symbol'].split('/')
-    ticker = symbol_parts[0] if symbol_parts else signal['symbol']
-    
-    return f"{arrows}\n\n<b>{ticker}</b>"
-
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
     print("🚀 ЗАПУСК БОТА: СТРОГАЯ ЛОГИКА RSI + BB (35/65) - ОБА ТРИГГЕРА ОБЯЗАТЕЛЬНЫ")
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
-        return
+    print("📱 Версия: ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ TELEGRAM")
+    
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Укажи TELEGRAM_BOT_TOKEN в переменных окружения!")
+        print("ℹ️  Бот будет работать, но сообщения в Telegram отправляться не будут")
+    else:
+        print("✅ TELEGRAM_BOT_TOKEN найден")
+        print("💡 Чтобы получать сигналы, просто напиши любому сообщение боту в Telegram")
 
     exchange = ccxt.bybit({"enableRateLimit": True})
     recent_signals = {}
@@ -211,7 +261,11 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот запущен | {total_symbols} монет | Строгая логика RSI+BB")
+    
+    # Отправляем приветственное сообщение во все чаты
+    if TELEGRAM_BOT_TOKEN:
+        welcome_message = "🤖 Бот сигналов запущен!\n\n📈 Логика: RSI + Bollinger Bands\n⚡ Сигналы приходят каждые 15 минут\n🔒 Строгая фильтрация\n\nОжидайте сигналы..."
+        send_telegram_to_all(welcome_message)
 
     signal_count = 0
 
@@ -240,9 +294,9 @@ def main():
                     recent_signals[symbol] = current_time
                     signal_count += 1
                     
-                    # Отправляем сигнал
+                    # Отправляем сигнал во ВСЕ чаты
                     message = format_signal_message(signal)
-                    send_telegram(message)
+                    send_telegram_to_all(message)
                     
                     print(f"🎯 СИГНАЛ #{signal_count}: {symbol} | Триггеры: {'+'.join(signal['triggers'])} | Следующий сигнал через 7 часов")
 
