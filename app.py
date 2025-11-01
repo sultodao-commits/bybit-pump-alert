@@ -190,20 +190,17 @@ def send_telegram(text: str):
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
         emoji = "🟢"
-        action = "LONG"
+        arrows = "↗️" * 8  # 8 стрелок вверх
     else:
-        emoji = "🔴"
-        action = "SHORT"
+        emoji = "🔴" 
+        arrows = "↘️" * 8  # 8 стрелок вниз
     
-    # Определяем какие триггеры сработали
     triggers_text = "+".join(signal['triggers'])
     
     return (
-        f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
-        f"<b>Монета:</b> <b><i>{signal['symbol']}</i></b>\n"
-        f"<b>Уверенность:</b> {signal['confidence']}%\n"
-        f"<b>Триггеры:</b> {triggers_text}\n\n"
-        f"<i>⏰ Кулдаун 7 часов</i>"
+        f"{emoji} {arrows}\n\n"
+        f"<b>{signal['symbol']}</b>\n"
+        f"<b>{signal['confidence']}%</b> | {triggers_text}"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
