@@ -243,7 +243,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот запущен | {total_symbols} монет | Логика: RSI или BB")
+    send_telegram(f"🤖 Бот  | {total_symbols}")
 
     signal_count = 0
 
