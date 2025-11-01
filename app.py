@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Signals Bot - СТРОГАЯ ЛОГИКА RSI + BB (ОБА УСЛОВИЯ)
-Полное сканирование рынка
+Простая версия без спама
 """
 
 import os
@@ -18,7 +18,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 # ========================= СТРОГИЕ НАСТРОЙКИ =========================
 
-# CORE 
 RSI_LENGTH = 14
 EMA_LENGTH = 50
 BB_LENGTH = 20
@@ -30,9 +29,6 @@ MIN_BODY_PCT = 0.25
 REQUIRE_BOTH_TRIGGERS = True
 POLL_INTERVAL_SEC = 60
 SIGNAL_COOLDOWN_MIN = 420
-
-# Глобальная переменная для отслеживания последнего сообщения
-last_update_id = 0
 
 # ========================= ПРОСТОЙ TELEGRAM =========================
 
@@ -74,57 +70,17 @@ def get_active_chats():
         print(f"❌ Ошибка получения чатов: {e}")
     return []
 
-def process_telegram_messages():
-    """Обрабатываем только новые входящие сообщения"""
-    if not TELEGRAM_BOT_TOKEN:
-        return
-        
-    global last_update_id
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    params = {}
-    
-    # Если есть последний update_id, запрашиваем только новые сообщения
-    if last_update_id:
-        params = {'offset': last_update_id + 1}
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('ok') and data.get('result'):
-                for update in data['result']:
-                    # Обновляем последний ID
-                    last_update_id = update['update_id']
-                    
-                    if 'message' in update and 'text' in update['message']:
-                        chat_id = update['message']['chat']['id']
-                        text = update['message']['text']
-                        
-                        # Отвечаем на команды
-                        if text.startswith('/'):
-                            if text in ['/start', '/status', '/help']:
-                                send_telegram_message(chat_id, "бот работает")
-    except Exception as e:
-        print(f"❌ Ошибка обработки сообщений: {e}")
-
 def broadcast_to_all_chats(text: str):
     """Отправляем сообщение во все активные чаты"""
     if not TELEGRAM_BOT_TOKEN:
-        print("❌ TELEGRAM_BOT_TOKEN не указан")
         return
         
     active_chats = get_active_chats()
     if not active_chats:
-        print("⚠️ Нет активных чатов для отправки")
         return
         
-    success_count = 0
     for chat_id in active_chats:
-        if send_telegram_message(chat_id, text):
-            success_count += 1
-    
-    print(f"📤 Сообщение отправлено в {success_count}/{len(active_chats)} чатов")
+        send_telegram_message(chat_id, text)
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
@@ -249,15 +205,12 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА")
-    print("📱 Бот")
+    print("🚀 ЗАПУСК БОТА - ПРОСТАЯ ВЕРСИЯ")
+    print("📱 Бот сканирует ВСЕ фьючерсные пары USDT")
     
     if not TELEGRAM_BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN не указан")
         print("💡 Сигналы будут только в консоли")
-    else:
-        print("✅ TELEGRAM_BOT_TOKEN найден")
-        print("💡 Напиши боту /start для активации")
 
     exchange = ccxt.bybit({"enableRateLimit": True})
     recent_signals = {}
@@ -281,9 +234,6 @@ def main():
 
     while True:
         try:
-            # Обрабатываем сообщения каждый цикл
-            process_telegram_messages()
-            
             print(f"\n⏱️ Сканирование {total_symbols} пар... | Сигналов: {signal_count}")
             current_time = time.time()
 
@@ -309,7 +259,7 @@ def main():
                     message = format_signal_message(signal)
                     broadcast_to_all_chats(message)
                     
-                    print(f"🎯  #{signal_count}: {symbol}")
+                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol}")
 
                 except Exception as e:
                     continue
