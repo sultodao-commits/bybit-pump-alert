@@ -31,6 +31,9 @@ REQUIRE_BOTH_TRIGGERS = True
 POLL_INTERVAL_SEC = 60
 SIGNAL_COOLDOWN_MIN = 420
 
+# Глобальная переменная для отслеживания последнего сообщения
+last_update_id = 0
+
 # ========================= ПРОСТОЙ TELEGRAM =========================
 
 def send_telegram_message(chat_id: str, text: str):
@@ -72,37 +75,36 @@ def get_active_chats():
     return []
 
 def process_telegram_messages():
-    """Обрабатываем входящие сообщения и отвечаем на команды"""
+    """Обрабатываем только новые входящие сообщения"""
     if not TELEGRAM_BOT_TOKEN:
         return
         
+    global last_update_id
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    params = {}
+    
+    # Если есть последний update_id, запрашиваем только новые сообщения
+    if last_update_id:
+        params = {'offset': last_update_id + 1}
+    
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, params=params, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get('ok') and data.get('result'):
                 for update in data['result']:
+                    # Обновляем последний ID
+                    last_update_id = update['update_id']
+                    
                     if 'message' in update and 'text' in update['message']:
                         chat_id = update['message']['chat']['id']
                         text = update['message']['text']
                         
                         # Отвечаем на команды
                         if text.startswith('/'):
-                            if text == '/start':
-                                welcome_msg = "бот работает"
-                                send_telegram_message(chat_id, welcome_msg)
-                            elif text == '/status':
-                                send_telegram_message(chat_id, "✅ Бот активен")
-                            elif text == '/help':
-                                help_msg = (
-                                    "📋 Доступные команды:\n"
-                                    "/start - запуск бота\n"
-                                    "/status - статус работы\n"
-                                    "/help - эта справка\n\n"
-                                    "Сигналы приходят автоматически"
-                                )
-                                send_telegram_message(chat_id, help_msg)
+                            if text in ['/start', '/status', '/help']:
+                                send_telegram_message(chat_id, "бот работает")
     except Exception as e:
         print(f"❌ Ошибка обработки сообщений: {e}")
 
@@ -273,7 +275,7 @@ def main():
             continue
 
     total_symbols = len(symbols)
-    print(f"Бот: {total_symbols}")
+    print(f"🔍 Найдено монет для сканирования: {total_symbols}")
 
     signal_count = 0
 
@@ -307,7 +309,7 @@ def main():
                     message = format_signal_message(signal)
                     broadcast_to_all_chats(message)
                     
-                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol}")
+                    print(f"🎯  #{signal_count}: {symbol}")
 
                 except Exception as e:
                     continue
