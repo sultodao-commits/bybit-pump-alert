@@ -200,14 +200,10 @@ def format_signal_message(signal: Dict) -> str:
     
     return (
         f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
-        f"<b>Монета:</b> {signal['symbol']}\n"
-        f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n"
+        f"<b>Монета:</b> <b><i>{signal['symbol']}</i></b>\n"
+        f"<b>Уверенность:</b> {signal['confidence']}%\n"
         f"<b>Триггеры:</b> {triggers_text}\n\n"
-        f"<b>ДЕТАЛИ:</b>\n"
-        f"• RSI: {signal['rsi']:.1f}\n"
-        f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
-        f"• Тело свечи: {signal['body_pct']:.1%}\n\n"
-        f"<i>⏰ Кулдаун 7 часов | RSI пороги: 35/65</i>"
+        f"<i>⏰ Кулдаун 7 часов</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
