@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - СТРОГАЯ ЛОГИКА RSI + BB (ОБА УСЛОВИЯ)
+Bybit Futures Signals Bot - ЛОГИКА RSI ИЛИ BB
 """
 
 import os
@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
-# ========================= СТРОГИЕ НАСТРОЙКИ =========================
+# ========================= НАСТРОЙКИ =========================
 
 # CORE 
 RSI_LENGTH = 14
@@ -23,17 +23,17 @@ EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (СТРОГИЕ) - ИЗМЕНЕНО НА 35 И 65
+# THRESHOLDS
 RSI_PANIC_THRESHOLD = 35    # LONG: RSI < 35
 RSI_FOMO_THRESHOLD = 65     # SHORT: RSI > 65
 
-# FILTERS (СТРОГИЕ)
+# FILTERS
 USE_EMA_SIDE_FILTER = False
 MIN_VOLUME_ZSCORE = 1.0     
 REQUIRE_RETURN_BB = True    
 REQUIRE_CANDLE_CONFIRM = True
 MIN_BODY_PCT = 0.25         
-REQUIRE_BOTH_TRIGGERS = True  # ✅ ВАЖНОЕ ИЗМЕНЕНИЕ: Требуем ОБА условия
+REQUIRE_BOTH_TRIGGERS = False  # ✅ ИЗМЕНЕНО: ЛИБО RSI ЛИБО BB
 
 POLL_INTERVAL_SEC = 60
 SIGNAL_COOLDOWN_MIN = 420   # КУЛДАУН 7 ЧАСОВ
@@ -81,7 +81,7 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
 
-# ========================= СТРОГАЯ ЛОГИКА СИГНАЛОВ (ОБА УСЛОВИЯ) =========================
+# ========================= ЛОГИКА СИГНАЛОВ (RSI ИЛИ BB) =========================
 
 def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
@@ -115,7 +115,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
         bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
 
-        # Условия RSI (СТРОГИЕ)
+        # Условия RSI
         long_rsi = rsi < RSI_PANIC_THRESHOLD  # RSI < 35
         short_rsi = rsi > RSI_FOMO_THRESHOLD  # RSI > 65
         
@@ -123,23 +123,38 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
         short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
 
-        # ✅ ВАЖНОЕ ИЗМЕНЕНИЕ: Требуем ОБА условия для сигнала
-        long_signal = long_rsi and long_bb and bull_candle_ok and volume_pass
-        short_signal = short_rsi and short_bb and bear_candle_ok and volume_pass
+        # ✅ ИЗМЕНЕНО: ЛИБО RSI ЛИБО BB (достаточно одного условия)
+        long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass
+        short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass
 
         if not long_signal and not short_signal:
             return None
 
-        # Определяем тип сигнала
+        # Определяем тип сигнала и уверенность
         if long_signal:
             signal_type = "LONG"
-            confidence = 90  # Высокая уверенность при выполнении обоих условий
+            # Определяем какой триггер сработал
+            if long_rsi and long_bb:
+                confidence = 90
+                triggers = ["RSI+BB"]
+            elif long_rsi:
+                confidence = 80
+                triggers = ["RSI"]
+            else:
+                confidence = 80
+                triggers = ["BB"]
         else:
-            signal_type = "SHORT" 
-            confidence = 90
+            signal_type = "SHORT"
+            if short_rsi and short_bb:
+                confidence = 90
+                triggers = ["RSI+BB"]
+            elif short_rsi:
+                confidence = 80
+                triggers = ["RSI"]
+            else:
+                confidence = 80
+                triggers = ["BB"]
 
-        # Определяем какие триггеры сработали (всегда оба)
-        triggers = ["RSI", "BB"]
         trigger_text = "+".join(triggers)
 
         print(f"🎯 {symbol}: {signal_type} | Триггеры: {trigger_text} | RSI={rsi:.1f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
@@ -207,7 +222,7 @@ def format_signal_message(signal: Dict) -> str:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: СТРОГАЯ ЛОГИКА RSI + BB (35/65) - ОБА ТРИГГЕРА ОБЯЗАТЕЛЬНЫ")
+    print("🚀 ЗАПУСК БОТА: ЛОГИКА RSI ИЛИ BB - ДОСТАТОЧНО ОДНОГО УСЛОВИЯ")
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
         return
@@ -228,7 +243,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот  | {total_symbols}")
+    send_telegram(f"🤖 Бот запущен | {total_symbols} монет | Логика: RSI или BB")
 
     signal_count = 0
 
