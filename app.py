@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - КУЛДАУН 7 ЧАСОВ
+Bybit Futures Signals Bot - СТРОГАЯ ЛОГИКА RSI + BB
 """
 
 import os
@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ========================= ОПТИМАЛЬНЫЕ НАСТРОЙКИ =========================
+# ========================= СТРОГИЕ НАСТРОЙКИ =========================
 
 # CORE 
 RSI_LENGTH = 14
@@ -24,19 +24,20 @@ EMA_LENGTH = 50
 BB_LENGTH = 20
 BB_MULTIPLIER = 1.8
 
-# THRESHOLDS (ОПТИМАЛЬНЫЕ)
-RSI_PANIC_THRESHOLD = 30    # Строгие зоны
-RSI_FOMO_THRESHOLD = 70     # Строгие зоны
+# THRESHOLDS (СТРОГИЕ)
+RSI_PANIC_THRESHOLD = 30    # LONG: RSI < 30
+RSI_FOMO_THRESHOLD = 70     # SHORT: RSI > 70
 
-# FILTERS (ОПТИМАЛЬНЫЕ)
-USE_EMA_SIDE_FILTER = False   # ВЫКЛЮЧЕН EMA фильтр
-MIN_VOLUME_ZSCORE = 1.0       # Высокий объем
-REQUIRE_RETURN_BB = True      # Только возврат в BB
+# FILTERS (СТРОГИЕ)
+USE_EMA_SIDE_FILTER = False
+MIN_VOLUME_ZSCORE = 1.0     
+REQUIRE_RETURN_BB = True    
 REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.25           # УМЕНЬШЕНО тело свечи
+MIN_BODY_PCT = 0.25         
+REQUIRE_BOTH_TRIGGERS = True  # ✅ ОБА триггера должны сработать
 
 POLL_INTERVAL_SEC = 60
-SIGNAL_COOLDOWN_MIN = 420     # КУЛДАУН 7 ЧАСОВ (60 * 7 = 420)
+SIGNAL_COOLDOWN_MIN = 420   # КУЛДАУН 7 ЧАСОВ
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -81,7 +82,7 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
 
-# ========================= ЛОГИКА СИГНАЛОВ =========================
+# ========================= СТРОГАЯ ЛОГИКА СИГНАЛОВ =========================
 
 def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
@@ -115,7 +116,7 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
         bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
 
-        # Условия RSI
+        # Условия RSI (СТРОГИЕ)
         long_rsi = rsi < RSI_PANIC_THRESHOLD
         short_rsi = rsi > RSI_FOMO_THRESHOLD
         
@@ -123,19 +124,23 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
         short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
 
-        # СИГНАЛЫ (БЕЗ EMA ФИЛЬТРА)
-        long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass
-        short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass
+        # ✅ СТРОГАЯ ЛОГИКА - ОБА УСЛОВИЯ ДОЛЖНЫ СРАБОТАТЬ
+        if REQUIRE_BOTH_TRIGGERS:
+            long_signal = long_rsi and long_bb and bull_candle_ok and volume_pass
+            short_signal = short_rsi and short_bb and bear_candle_ok and volume_pass
+        else:
+            long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass
+            short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass
 
         if not long_signal and not short_signal:
             return None
 
         if long_signal:
             signal_type = "LONG"
-            confidence = 80
+            confidence = 85
         else:
-            signal_type = "SHORT"
-            confidence = 80
+            signal_type = "SHORT" 
+            confidence = 85
 
         print(f"🎯 {symbol}: {signal_type} | RSI={rsi:.1f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
 
@@ -179,17 +184,17 @@ def format_signal_message(signal: Dict) -> str:
         f"{emoji} <b>{action} СИГНАЛ</b>\n\n"
         f"<b>Монета:</b> {signal['symbol']}\n"
         f"<b>Уверенность:</b> {signal['confidence']:.1f}%\n\n"
-        f"<b>АНАЛИЗ:</b>\n"
+        f"<b>СТРОГИЙ АНАЛИЗ:</b>\n"
         f"• RSI: {signal['rsi']:.1f}\n"
         f"• Объем Z-score: {signal['volume_zscore']:.2f}\n"
         f"• Тело свечи: {signal['body_pct']:.1%}\n\n"
-        f"<i>⏰ Кулдаун 7 часов на монету</i>"
+        f"<i>⏰ Кулдаун 7 часов | Оба триггера</i>"
     )
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: КУЛДАУН 7 ЧАСОВ")
+    print("🚀 ЗАПУСК БОТА: СТРОГАЯ ЛОГИКА RSI + BB")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Укажи TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID!")
         return
@@ -210,7 +215,7 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 <b>Бот запущен</b>: Кулдаун 7 часов | {total_symbols} монет")
+    send_telegram(f"🤖 <b>Бот запущен</b>: Строгая логика RSI+BB | {total_symbols} монет")
 
     signal_count = 0
 
@@ -221,7 +226,7 @@ def main():
 
             for symbol in symbols:
                 try:
-                    # СТРОГАЯ ПРОВЕРКА КУЛДАУНА 7 ЧАСОВ
+                    # ПРОВЕРКА КУЛДАУНА 7 ЧАСОВ
                     if symbol in recent_signals:
                         time_since_last_signal = current_time - recent_signals[symbol]
                         if time_since_last_signal < SIGNAL_COOLDOWN_MIN * 60:
@@ -244,7 +249,7 @@ def main():
                 except Exception as e:
                     continue
 
-            # Очистка старых записей (храним 14 часов)
+            # Очистка старых записей
             current_time = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() 
                             if current_time - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
