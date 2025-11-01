@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Bybit Futures Signals Bot - СТРОГАЯ ЛОГИКА RSI + BB (ОБА УСЛОВИЯ)
-Упрощенная версия с отзывчивым ботом
+Полное сканирование рынка
 """
 
 import os
@@ -90,17 +90,10 @@ def process_telegram_messages():
                         # Отвечаем на команды
                         if text.startswith('/'):
                             if text == '/start':
-                                welcome_msg = (
-                                    "🤖 Бот торговых сигналов активирован!\n\n"
-                                    "📊 Логика: RSI + Bollinger Bands\n"
-                                    "🔒 Строгая фильтрация (оба условия)\n"
-                                    "⏰ Сигналы каждые 15 минут\n"
-                                    "💎 Только качественные setup\n\n"
-                                    "Ожидайте сигналы... 🚀"
-                                )
+                                welcome_msg = "бот работает"
                                 send_telegram_message(chat_id, welcome_msg)
                             elif text == '/status':
-                                send_telegram_message(chat_id, "✅ Бот активен и сканирует рынок")
+                                send_telegram_message(chat_id, "✅ Бот активен")
                             elif text == '/help':
                                 help_msg = (
                                     "📋 Доступные команды:\n"
@@ -133,7 +126,7 @@ def broadcast_to_all_chats(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        arrows = "↗️" * 4  # Уменьшил до 4 стрелок
+        arrows = "↗️" * 4
     else:
         arrows = "↘️" * 4
     
@@ -142,7 +135,7 @@ def format_signal_message(signal: Dict) -> str:
     
     return f"{arrows}\n\n<b>{ticker}</b>"
 
-# ========================= ИНДИКАТОРЫ (без изменений) =========================
+# ========================= ИНДИКАТОРЫ =========================
 
 def calculate_rsi(prices: List[float], period: int = 14) -> float:
     if len(prices) < period + 1:
@@ -185,7 +178,7 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
 
-# ========================= ЛОГИКА СИГНАЛОВ (без изменений) =========================
+# ========================= ЛОГИКА СИГНАЛОВ =========================
 
 def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
@@ -254,8 +247,8 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА - УПРОЩЕННАЯ ВЕРСИЯ")
-    print("📱 Бот теперь откликается на команды")
+    print("🚀 ЗАПУСК БОТА")
+    print("📱 Бот")
     
     if not TELEGRAM_BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN не указан")
@@ -267,22 +260,20 @@ def main():
     exchange = ccxt.bybit({"enableRateLimit": True})
     recent_signals = {}
 
-    # Загрузка рынков (только основные монеты для скорости)
+    # ЗАГРУЗКА ВСЕХ ФЬЮЧЕРСНЫХ ПАР USDT
     markets = exchange.load_markets()
     symbols = []
-    MAJOR_COINS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK', 'DOGE', 'TRX']
 
     for symbol, market in markets.items():
         try:
             if (market.get("type") == "swap" and market.get("linear") and
                 market.get("settle") == "USDT" and "USDT" in symbol and "/" in symbol):
-                coin = symbol.split('/')[0]
-                if coin in MAJOR_COINS:
-                    symbols.append(symbol)
+                symbols.append(symbol)
         except:
             continue
 
-    print(f"🔍 Сканируем {len(symbols)} основных монет")
+    total_symbols = len(symbols)
+    print(f"Бот: {total_symbols}")
 
     signal_count = 0
 
@@ -291,7 +282,7 @@ def main():
             # Обрабатываем сообщения каждый цикл
             process_telegram_messages()
             
-            print(f"\n⏱️ Сканирование... | Сигналов: {signal_count}")
+            print(f"\n⏱️ Сканирование {total_symbols} пар... | Сигналов: {signal_count}")
             current_time = time.time()
 
             for symbol in symbols:
