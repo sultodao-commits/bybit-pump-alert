@@ -218,7 +218,7 @@ def main():
     markets = exchange.load_markets()
     symbols = []
 
-    TARGET_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "HPOS10IUSDT.P"]
+    TARGET_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "HPOS10I/USDT"]
     
     for symbol in TARGET_SYMBOLS:
         if symbol in markets:
