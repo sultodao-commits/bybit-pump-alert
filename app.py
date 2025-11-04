@@ -217,7 +217,18 @@ def format_signal_message(signal: Dict) -> str:
     symbol_parts = signal['symbol'].split('/')
     ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
-    return f"{arrows}\n\n<b>{ticker}</b>"
+    # ЗАМЕНА ТИКЕРОВ НА СЛОВА
+    ticker_replacements = {
+        "BTC": "большой",
+        "ETH": "средний", 
+        "SOL": "маленький",
+        "HPOS10I": "бойцов"
+    }
+    
+    # Заменяем тикер если он есть в словаре
+    display_ticker = ticker_replacements.get(ticker, ticker)
+    
+    return f"{arrows}\n\n<b>{display_ticker}</b>"
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
