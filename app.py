@@ -218,13 +218,11 @@ def main():
     markets = exchange.load_markets()
     symbols = []
 
-    for symbol, market in markets.items():
-        try:
-            if (market.get("type") == "swap" and market.get("linear") and
-                market.get("settle") == "USDT" and "USDT" in symbol and "/" in symbol):
-                symbols.append(symbol)
-        except:
-            continue
+    TARGET_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "HPOS10IUSDT.P"]
+    
+    for symbol in TARGET_SYMBOLS:
+        if symbol in markets:
+            symbols.append(symbol)
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
