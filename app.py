@@ -209,15 +209,13 @@ def send_telegram(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        arrows = "🚀" * 3  # 8 стрелок вверх
+        arrows = "🚀" * 3
     else:
-        arrows = "❌" * 3  # 8 стрелок вниз
+        arrows = "❌" * 3
     
-    # Извлекаем только название тикера (убираем /USDT)
     symbol_parts = signal['symbol'].split('/')
     ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
-    # ЗАМЕНА ТИКЕРОВ НА СЛОВА
     ticker_replacements = {
         "BTC": "большой",
         "ETH": "средний", 
@@ -225,7 +223,6 @@ def format_signal_message(signal: Dict) -> str:
         "HPOS10I": "бойцов"
     }
     
-    # Заменяем тикер если он есть в словаре
     display_ticker = ticker_replacements.get(ticker, ticker)
     
     return f"{arrows}\n\n<b>{display_ticker}</b>"
@@ -238,15 +235,23 @@ def main():
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
         return
 
-    exchange = ccxt.bybit({"enableRateLimit": True})
+    exchange = ccxt.bybit({
+        "enableRateLimit": True,
+        "options": {
+            "defaultType": "swap"  # фьючерсный рынок (перпетуалы)
+        }
+    })
+
     recent_signals = {}
 
     markets = exchange.load_markets()
     symbols = []
 
-    # ✅ ИЗМЕНЕНО: АНАЛИЗИРУЕМ ВСЕ ДОСТУПНЫЕ USDT ПАРЫ ВМЕСТО 4 КОНКРЕТНЫХ
     for symbol in markets:
-        if symbol.endswith('/USDT') and markets[symbol]['active']:
+        if (
+            markets[symbol]['active']
+            and ':USDT' in symbol  # только бессрочные контракты
+        ):
             symbols.append(symbol)
 
     total_symbols = len(symbols)
@@ -262,7 +267,6 @@ def main():
 
             for symbol in symbols:
                 try:
-                    # ПРОВЕРКА КУЛДАУНА 7 ЧАСОВ
                     if symbol in recent_signals:
                         time_since_last_signal = current_time - recent_signals[symbol]
                         if time_since_last_signal < SIGNAL_COOLDOWN_MIN * 60:
@@ -276,11 +280,9 @@ def main():
                     if not signal:
                         continue
 
-                    # СОХРАНЯЕМ ВРЕМЯ СИГНАЛА
                     recent_signals[symbol] = current_time
                     signal_count += 1
                     
-                    # Отправляем сигнал
                     message = format_signal_message(signal)
                     send_telegram(message)
                     
@@ -289,7 +291,6 @@ def main():
                 except Exception as e:
                     continue
 
-            # Очистка старых записей
             current_time = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() 
                             if current_time - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
