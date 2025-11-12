@@ -209,23 +209,14 @@ def send_telegram(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        arrows = "🚀" * 3
+        arrows = "🚀🚀🚀"
     else:
-        arrows = "❌" * 3
+        arrows = "❌❌❌"
     
     symbol_parts = signal['symbol'].split('/')
     ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
-    ticker_replacements = {
-        "BTC": "большой",
-        "ETH": "средний", 
-        "SOL": "маленький",
-        "HPOS10I": "бойцов"
-    }
-    
-    display_ticker = ticker_replacements.get(ticker, ticker)
-    
-    return f"{arrows}\n\n<b>{display_ticker}</b>"
+    return f"{arrows} - {ticker}"
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
