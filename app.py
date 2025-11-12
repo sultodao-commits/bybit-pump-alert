@@ -241,7 +241,7 @@ def main():
     for symbol in markets:
         if (
             markets[symbol]['active']
-            and ':USDT' in symbol  # только бессрочные контракты
+            and symbol.endswith(':USDT')  # только бессрочные контракты с USDT
         ):
             symbols.append(symbol)
 
