@@ -244,15 +244,14 @@ def main():
     markets = exchange.load_markets()
     symbols = []
 
-    TARGET_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "HPOS10I/USDT"]
-    
-    for symbol in TARGET_SYMBOLS:
-        if symbol in markets:
+    # ✅ ИЗМЕНЕНО: АНАЛИЗИРУЕМ ВСЕ ДОСТУПНЫЕ USDT ПАРЫ ВМЕСТО 4 КОНКРЕТНЫХ
+    for symbol in markets:
+        if symbol.endswith('/USDT') and markets[symbol]['active']:
             symbols.append(symbol)
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот  | {total_symbols}")
+    send_telegram(f"🤖 Бот запущен | Анализ {total_symbols} монет")
 
     signal_count = 0
 
