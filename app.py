@@ -209,9 +209,9 @@ def send_telegram(text: str):
 
 def format_signal_message(signal: Dict) -> str:
     if signal["type"] == "LONG":
-        arrows = "🚀" * 8  # 8 стрелок вверх
+        arrows = "🚀" * 3  # 8 стрелок вверх
     else:
-        arrows = "❌" * 8  # 8 стрелок вниз
+        arrows = "❌" * 3  # 8 стрелок вниз
     
     # Извлекаем только название тикера (убираем /USDT)
     symbol_parts = signal['symbol'].split('/')
