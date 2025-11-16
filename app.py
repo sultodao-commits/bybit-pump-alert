@@ -33,7 +33,7 @@ MIN_VOLUME_ZSCORE = 0.5     # ✅ ОСЛАБЛЕНО: было 1.0
 REQUIRE_RETURN_BB = True    
 REQUIRE_CANDLE_CONFIRM = True
 MIN_BODY_PCT = 0.15         # ✅ ОСЛАБЛЕНО: было 0.25
-REQUIRE_BOTH_TRIGGERS = False  # ✅ ИЗМЕНЕНО: ДОСТАТОЧНО ОДНОГО УСЛОВИЯ
+REQUIRE_BOTH_TRIGGERS = True  # ✅ ИЗМЕНЕНО: ТЕПЕРЬ ТРЕБУЮТСЯ ОБА УСЛОВИЯ
 
 POLL_INTERVAL_SEC = 60
 SIGNAL_COOLDOWN_MIN = 420   # КУЛДАУН 7 ЧАСОВ
@@ -123,9 +123,9 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
         short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
 
-        # ✅ ИЗМЕНЕНО: ДОСТАТОЧНО ОДНОГО УСЛОВИЯ (ИЛИ RSI ИЛИ BB)
-        long_signal = (long_rsi or long_bb) and bull_candle_ok and volume_pass
-        short_signal = (short_rsi or short_bb) and bear_candle_ok and volume_pass
+        # ✅ ИЗМЕНЕНО: ТЕПЕРЬ ТРЕБУЮТСЯ ОБА УСЛОВИЯ (И RSI И BB)
+        long_signal = long_rsi and long_bb and bull_candle_ok and volume_pass
+        short_signal = short_rsi and short_bb and bear_candle_ok and volume_pass
 
         if not long_signal and not short_signal:
             return None
@@ -221,7 +221,7 @@ def format_signal_message(signal: Dict) -> str:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ЛОГИКА RSI И BB - ДОСТАТОЧНО ОДНОГО УСЛОВИЯ")
+    print("🚀 ЗАПУСК БОТА: ЛОГИКА RSI И BB - ТРЕБУЮТСЯ ОБА УСЛОВИЯ")
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
         return
