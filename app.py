@@ -21,11 +21,11 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 RSI_LENGTH = 14
 EMA_LENGTH = 50
 BB_LENGTH = 20
-BB_MULTIPLIER = 1.8
+BB_MULTIPLIER = 2.0         # ✅ ОСЛАБЛЕНО: было 1.8
 
 # THRESHOLDS
-RSI_PANIC_THRESHOLD = 35    # LONG: RSI < 35
-RSI_FOMO_THRESHOLD = 65     # SHORT: RSI > 65
+RSI_PANIC_THRESHOLD = 40    # ✅ ОСЛАБЛЕНО: было 35
+RSI_FOMO_THRESHOLD = 60     # ✅ ОСЛАБЛЕНО: было 65
 
 # FILTERS
 USE_EMA_SIDE_FILTER = False
@@ -116,8 +116,8 @@ def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
 
         # Условия RSI
-        long_rsi = rsi < RSI_PANIC_THRESHOLD  # RSI < 35
-        short_rsi = rsi > RSI_FOMO_THRESHOLD  # RSI > 65
+        long_rsi = rsi < RSI_PANIC_THRESHOLD  # RSI < 40
+        short_rsi = rsi > RSI_FOMO_THRESHOLD  # RSI > 60
         
         # Условия BB (возврат от границ)
         long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
@@ -294,4 +294,12 @@ def main():
         time.sleep(POLL_INTERVAL_SEC)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("⏹️ Бот остановлен")
+    except Exception as e:
+        print(f"💥 Критическая ошибка: {e}")
+        print("🔄 Перезапуск через 10 секунд...")
+        time.sleep(10)
+        main()
