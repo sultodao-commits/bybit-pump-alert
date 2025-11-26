@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Futures Signals Bot - ЛОГИКА RSI И BB
+Bybit Pump & Dump Scanner - 15min
 """
 
 import os
@@ -15,63 +15,23 @@ from typing import List, Dict, Any, Optional
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
-# ========================= НАСТРОЙКИ =========================
+# ========================= НАСТРОЙКИ СКАНЕРА =========================
 
-# CORE 
-RSI_LENGTH = 14
-EMA_LENGTH = 50
-BB_LENGTH = 20
-BB_MULTIPLIER = 2.0         # ✅ ОСЛАБЛЕНО: было 1.8
-
-# THRESHOLDS
-RSI_PANIC_THRESHOLD = 40    # ✅ ОСЛАБЛЕНО: было 35
-RSI_FOMO_THRESHOLD = 60     # ✅ ОСЛАБЛЕНО: было 65
+# PUMP/DUMP DETECTION
+PRICE_CHANGE_THRESHOLD = 7.0      # Минимальное изменение цены в % за 15 минут
+VOLUME_SPIKE_THRESHOLD = 2.5      # Минимальный Z-score объема
+MIN_ABSOLUTE_VOLUME = 50000       # Минимальный объем в USDT
 
 # FILTERS
-USE_EMA_SIDE_FILTER = False
-MIN_VOLUME_ZSCORE = 0.5     # ✅ ОСЛАБЛЕНО: было 1.0
-REQUIRE_RETURN_BB = True    
-REQUIRE_CANDLE_CONFIRM = True
-MIN_BODY_PCT = 0.15         # ✅ ОСЛАБЛЕНО: было 0.25
-REQUIRE_BOTH_TRIGGERS = True  # ✅ ИЗМЕНЕНО: ТЕПЕРЬ ТРЕБУЮТСЯ ОБА УСЛОВИЯ
+REQUIRE_VOLUME_CONFIRMATION = True  # Требовать всплеск объема
 
-POLL_INTERVAL_SEC = 60
-SIGNAL_COOLDOWN_MIN = 420   # КУЛДАУН 7 ЧАСОВ
+POLL_INTERVAL_SEC = 60            # Интервал сканирования
+SIGNAL_COOLDOWN_MIN = 30          # Кулдаун на монету (минут)
 
 # ========================= ИНДИКАТОРЫ =========================
 
-def calculate_rsi(prices: List[float], period: int = 14) -> float:
-    if len(prices) < period + 1:
-        return 50.0
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
-    if not gains and not losses:
-        return 50.0
-    avg_gain = sum(gains[-period:]) / period if gains else 0
-    avg_loss = sum(losses[-period:]) / period if losses else 0.0001
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return min(max(rsi, 0), 100)
-
-def calculate_ema(prices: List[float], period: int) -> float:
-    if len(prices) < period:
-        return prices[-1] if prices else 0
-    weights = np.exp(np.linspace(-1., 0., period))
-    weights /= weights.sum()
-    return np.convolve(prices[-period:], weights, mode='valid')[-1]
-
-def calculate_bollinger_bands(prices: List[float], period: int, mult: float) -> tuple:
-    if len(prices) < period:
-        basis = prices[-1] if prices else 0
-        return basis, basis, basis
-    basis = np.mean(prices[-period:])
-    dev = mult * np.std(prices[-period:])
-    upper = basis + dev
-    lower = basis - dev
-    return basis, upper, lower
-
 def calculate_volume_zscore(volumes: List[float], period: int) -> float:
+    """Расчет Z-score объема"""
     if len(volumes) < period:
         return 0.0
     recent_volumes = volumes[-period:]
@@ -81,95 +41,84 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
 
-# ========================= ЛОГИКА СИГНАЛОВ (RSI И BB) =========================
+def calculate_15min_price_change(ohlcv: List) -> float:
+    """Расчет изменения цены за последнюю 15-минутную свечу"""
+    if len(ohlcv) < 2:
+        return 0.0
+    
+    current_candle = ohlcv[-1]
+    previous_candle = ohlcv[-2]
+    
+    current_close = float(current_candle[4])
+    previous_close = float(previous_candle[4])
+    
+    if previous_close == 0:
+        return 0.0
+    
+    return ((current_close - previous_close) / previous_close) * 100
 
-def analyze_tv_signals(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
+# ========================= ЛОГИКА СКАНЕРА PUMP/DUMP =========================
+
+def analyze_pump_dump(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
-        if len(ohlcv) < 25:
+        if len(ohlcv) < 20:
             return None
 
         closes = [float(c[4]) for c in ohlcv]
-        opens = [float(c[1]) for c in ohlcv]
-        highs = [float(c[2]) for c in ohlcv]
-        lows = [float(c[3]) for c in ohlcv]
         volumes = [float(c[5]) for c in ohlcv]
-
+        
+        # Текущие значения
+        current_volume = volumes[-1]
         current_close = closes[-1]
-        current_open = opens[-1]
-        current_high = highs[-1]
-        current_low = lows[-1]
-        prev_close = closes[-2] if len(closes) > 1 else current_close
-
-        # Индикаторы
-        rsi = calculate_rsi(closes, RSI_LENGTH)
-        ema = calculate_ema(closes, EMA_LENGTH)
-        basis, bb_upper, bb_lower = calculate_bollinger_bands(closes, BB_LENGTH, BB_MULTIPLIER)
-        volume_zscore = calculate_volume_zscore(volumes, BB_LENGTH)
         
-        # ФИЛЬТРЫ
-        volume_pass = volume_zscore >= MIN_VOLUME_ZSCORE
+        # Расчет изменения цены за 15 минут
+        price_change = calculate_15min_price_change(ohlcv)
         
-        candle_range = max(current_high - current_low, 0.0001)
-        body = abs(current_close - current_open)
-        body_pct = body / candle_range
-        bull_candle_ok = (current_close > current_open) and (body_pct >= MIN_BODY_PCT)
-        bear_candle_ok = (current_close < current_open) and (body_pct >= MIN_BODY_PCT)
-
-        # Условия RSI
-        long_rsi = rsi < RSI_PANIC_THRESHOLD  # RSI < 40
-        short_rsi = rsi > RSI_FOMO_THRESHOLD  # RSI > 60
+        # Расчет Z-score объема
+        volume_zscore = calculate_volume_zscore(volumes[:-1], 15)  # Используем предыдущие свечи для сравнения
         
-        # Условия BB (возврат от границ)
-        long_bb = (prev_close <= bb_lower) and (current_close > bb_lower)
-        short_bb = (prev_close >= bb_upper) and (current_close < bb_upper)
-
-        # ✅ ИЗМЕНЕНО: ТЕПЕРЬ ТРЕБУЮТСЯ ОБА УСЛОВИЯ (И RSI И BB)
-        long_signal = long_rsi and long_bb and bull_candle_ok and volume_pass
-        short_signal = short_rsi and short_bb and bear_candle_ok and volume_pass
-
-        if not long_signal and not short_signal:
+        # Проверка абсолютного объема
+        volume_pass = current_volume >= MIN_ABSOLUTE_VOLUME
+        
+        # Определение типа движения
+        is_pump = price_change >= PRICE_CHANGE_THRESHOLD
+        is_dump = price_change <= -PRICE_CHANGE_THRESHOLD
+        
+        if not (is_pump or is_dump):
             return None
-
-        # Определяем тип сигнала и уверенность
-        triggers = []
-        if long_signal:
-            signal_type = "LONG"
-            if long_rsi and long_bb:
-                triggers = ["RSI+BB"]
-                confidence = 90
-            elif long_rsi:
-                triggers = ["RSI"]
-                confidence = 70
-            else:
-                triggers = ["BB"]
-                confidence = 70
+        
+        # Проверка объема (если требуется)
+        volume_confirm = True
+        if REQUIRE_VOLUME_CONFIRMATION:
+            volume_confirm = volume_zscore >= VOLUME_SPIKE_THRESHOLD
+        
+        if not (volume_pass and volume_confirm):
+            return None
+        
+        # Определение силы сигнала
+        if abs(price_change) >= 15:
+            confidence = 95
+            strength = "💥 СИЛЬНЫЙ"
+        elif abs(price_change) >= 10:
+            confidence = 85
+            strength = "🚨 СРЕДНИЙ"
         else:
-            signal_type = "SHORT"
-            if short_rsi and short_bb:
-                triggers = ["RSI+BB"]
-                confidence = 90
-            elif short_rsi:
-                triggers = ["RSI"]
-                confidence = 70
-            else:
-                triggers = ["BB"]
-                confidence = 70
-
-        trigger_text = "+".join(triggers)
-
-        print(f"🎯 {symbol}: {signal_type} | Триггеры: {trigger_text} | RSI={rsi:.1f} | Объем Z={volume_zscore:.2f} | Тело={body_pct:.1%}")
+            confidence = 75
+            strength = "📈 СЛАБЫЙ"
+        
+        signal_type = "PUMP" if is_pump else "DUMP"
+        
+        print(f"🎯 {symbol}: {signal_type} | Изменение: {price_change:+.1f}% | Объем Z={volume_zscore:.1f}")
 
         return {
             "symbol": symbol,
             "type": signal_type,
-            "rsi": rsi,
-            "ema": ema,
-            "bb_upper": bb_upper,
-            "bb_lower": bb_lower,
+            "price_change": price_change,
             "volume_zscore": volume_zscore,
-            "body_pct": body_pct,
+            "volume_usdt": current_volume,
+            "current_price": current_close,
             "confidence": confidence,
-            "triggers": triggers,
+            "strength": strength,
             "timestamp": time.time()
         }
 
@@ -208,20 +157,36 @@ def send_telegram(text: str):
         pass
 
 def format_signal_message(signal: Dict) -> str:
-    if signal["type"] == "LONG":
-        arrows = "🚀🚀🚀"
-    else:
-        arrows = "❌❌❌"
-    
     symbol_parts = signal['symbol'].split('/')
     ticker = symbol_parts[0] if symbol_parts else signal['symbol']
     
-    return f"{arrows} - {ticker}"
+    if signal["type"] == "PUMP":
+        emoji = "🚀"
+        direction = "ВВЕРХ"
+        color = "🟢"
+    else:
+        emoji = "💥"
+        direction = "ВНИЗ"
+        color = "🔴"
+    
+    change = signal['price_change']
+    volume_z = signal['volume_zscore']
+    
+    return f"""{emoji} <b>ПАМП/ДАМП СИГНАЛ</b> {emoji}
+
+{color} <b>{ticker}</b> | {direction}
+📊 Изменение: <b>{change:+.1f}%</b> за 15мин
+📈 Объем: <b>Z={volume_z:.1f}</b>
+💪 Сила: <b>{signal['strength']}</b>
+
+⏰ Время: {time.strftime('%H:%M:%S')}"""
 
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК БОТА: ЛОГИКА RSI И BB - ТРЕБУЮТСЯ ОБА УСЛОВИЯ")
+    print("🚀 ЗАПУСК СКАНЕРА ПАМПОВ/ДАМПОВ - 15 МИНУТ")
+    print(f"🔍 Отслеживание движений от {PRICE_CHANGE_THRESHOLD}% за 15 минут")
+    
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
         return
@@ -247,13 +212,13 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Бот запущен | А {total_symbols} n")
+    send_telegram(f"🤖 Сканер пампов/дампов запущен | Монет: {total_symbols}")
 
     signal_count = 0
 
     while True:
         try:
-            print(f"\n⏱️ Сканирование... | Сигналов: {signal_count}")
+            print(f"\n⏱️ Сканирование 15min свечей... | Сигналов: {signal_count}")
             current_time = time.time()
 
             for symbol in symbols:
@@ -263,11 +228,11 @@ def main():
                         if time_since_last_signal < SIGNAL_COOLDOWN_MIN * 60:
                             continue
 
-                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=25)
-                    if not ohlcv or len(ohlcv) < 20:
+                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=20)
+                    if not ohlcv or len(ohlcv) < 5:
                         continue
 
-                    signal = analyze_tv_signals(symbol, ohlcv)
+                    signal = analyze_pump_dump(symbol, ohlcv)
                     if not signal:
                         continue
 
@@ -277,11 +242,12 @@ def main():
                     message = format_signal_message(signal)
                     send_telegram(message)
                     
-                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol} | Триггеры: {'+'.join(signal['triggers'])} | Следующий сигнал через 7 часов")
+                    print(f"🎯 СИГНАЛ #{signal_count}: {symbol} | {signal['type']} | {signal['price_change']:+.1f}% | Объем Z={signal['volume_zscore']:.1f}")
 
                 except Exception as e:
                     continue
 
+            # Очистка старых сигналов
             current_time = time.time()
             recent_signals = {k: v for k, v in recent_signals.items() 
                             if current_time - v < SIGNAL_COOLDOWN_MIN * 60 * 2}
@@ -297,7 +263,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("⏹️ Бот остановлен")
+        print("⏹️ Сканер остановлен")
     except Exception as e:
         print(f"💥 Критическая ошибка: {e}")
         print("🔄 Перезапуск через 10 секунд...")
