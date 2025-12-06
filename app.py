@@ -14,7 +14,6 @@ from typing import List, Dict, Any, Optional
 # ========================= НАСТРОЙКИ =========================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 # ========================= НАСТРОЙКИ СКАНЕРА =========================
 
@@ -131,28 +130,31 @@ def analyze_pump_dump(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
 
 def send_telegram(text: str):
     if not TELEGRAM_BOT_TOKEN:
-        print("❌ Не указан TELEGRAM_BOT_TOKEN")
         return
     
-    if not TELEGRAM_CHAT_ID:
-        print("❌ Не указан TELEGRAM_CHAT_ID")
-        return
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    
+    # Получаем все активные чаты из getUpdates
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            print(f"✅ Сообщение отправлено в Telegram")
-        else:
-            print(f"❌ Ошибка Telegram API: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Ошибка отправки в Telegram: {e}")
+            data = response.json()
+            if data.get('ok') and data.get('result'):
+                chats = set()
+                for update in data['result']:
+                    if 'message' in update:
+                        chat_id = update['message']['chat']['id']
+                        chats.add(chat_id)
+                
+                # Отправляем сообщение в каждый чат
+                for chat_id in chats:
+                    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+                    try:
+                        requests.post(send_url, json=payload, timeout=5)
+                    except:
+                        pass
+    except:
+        pass
 
 def format_signal_message(signal: Dict) -> str:
     symbol_parts = signal['symbol'].split('/')
@@ -189,10 +191,6 @@ def main():
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
         return
 
-    if not TELEGRAM_CHAT_ID:
-        print("❌ Укажи TELEGRAM_CHAT_ID!")
-        return
-
     exchange = ccxt.bybit({
         "enableRateLimit": True,
         "options": {
@@ -215,7 +213,6 @@ def main():
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
     send_telegram(f"🤖 Сканер пампов/дампов запущен | Монет: {total_symbols}")
-    send_telegram("✅ Бот работает, все норм!")
 
     signal_count = 0
 
