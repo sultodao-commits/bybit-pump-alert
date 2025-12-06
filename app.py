@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bybit Pump & Dump Scanner - 15min
+Bybit Pump & Dump Scanner - 5min
 """
 
 import os
@@ -18,15 +18,15 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 # ========================= НАСТРОЙКИ СКАНЕРА =========================
 
 # PUMP/DUMP DETECTION
-PRICE_CHANGE_THRESHOLD = 7.0      # Минимальное изменение цены в % за 15 минут
-VOLUME_SPIKE_THRESHOLD = 2.5      # Минимальный Z-score объема
-MIN_ABSOLUTE_VOLUME = 50000       # Минимальный объем в USDT
+PRICE_CHANGE_THRESHOLD = 5.0      # Минимальное изменение цены в % за 5 минут
+VOLUME_SPIKE_THRESHOLD = 3.0      # Минимальный Z-score объема
+MIN_ABSOLUTE_VOLUME = 75000       # Минимальный объем в USDT
 
 # FILTERS
 REQUIRE_VOLUME_CONFIRMATION = True  # Требовать всплеск объема
 
-POLL_INTERVAL_SEC = 60            # Интервал сканирования
-SIGNAL_COOLDOWN_MIN = 30          # Кулдаун на монету (минут)
+POLL_INTERVAL_SEC = 30            # Интервал сканирования (меньше для 5min)
+SIGNAL_COOLDOWN_MIN = 15          # Кулдаун на монету (минут)
 
 # ========================= ИНДИКАТОРЫ =========================
 
@@ -41,8 +41,8 @@ def calculate_volume_zscore(volumes: List[float], period: int) -> float:
         return 0.0
     return (volumes[-1] - mean_vol) / std_vol
 
-def calculate_15min_price_change(ohlcv: List) -> float:
-    """Расчет изменения цены за последнюю 15-минутную свечу"""
+def calculate_price_change(ohlcv: List) -> float:
+    """Расчет изменения цены за последнюю 5-минутную свечу"""
     if len(ohlcv) < 2:
         return 0.0
     
@@ -61,7 +61,7 @@ def calculate_15min_price_change(ohlcv: List) -> float:
 
 def analyze_pump_dump(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
     try:
-        if len(ohlcv) < 20:
+        if len(ohlcv) < 25:  # Больше данных для 5min
             return None
 
         closes = [float(c[4]) for c in ohlcv]
@@ -71,11 +71,11 @@ def analyze_pump_dump(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         current_volume = volumes[-1]
         current_close = closes[-1]
         
-        # Расчет изменения цены за 15 минут
-        price_change = calculate_15min_price_change(ohlcv)
+        # Расчет изменения цены за 5 минут
+        price_change = calculate_price_change(ohlcv)
         
-        # Расчет Z-score объема
-        volume_zscore = calculate_volume_zscore(volumes[:-1], 15)  # Используем предыдущие свечи для сравнения
+        # Расчет Z-score объема (больше период для стабильности)
+        volume_zscore = calculate_volume_zscore(volumes[:-1], 20)
         
         # Проверка абсолютного объема
         volume_pass = current_volume >= MIN_ABSOLUTE_VOLUME
@@ -95,15 +95,15 @@ def analyze_pump_dump(symbol: str, ohlcv: List) -> Optional[Dict[str, Any]]:
         if not (volume_pass and volume_confirm):
             return None
         
-        # Определение силы сигнала
-        if abs(price_change) >= 15:
-            confidence = 95
+        # Определение силы сигнала (скорректировано для 5min)
+        if abs(price_change) >= 8:
+            confidence = 90
             strength = "💥 СИЛЬНЫЙ"
-        elif abs(price_change) >= 10:
-            confidence = 85
+        elif abs(price_change) >= 6:
+            confidence = 80
             strength = "🚨 СРЕДНИЙ"
         else:
-            confidence = 75
+            confidence = 70
             strength = "📈 СЛАБЫЙ"
         
         signal_type = "PUMP" if is_pump else "DUMP"
@@ -172,10 +172,10 @@ def format_signal_message(signal: Dict) -> str:
     change = signal['price_change']
     volume_z = signal['volume_zscore']
     
-    return f"""{emoji} <b>ПАМП/ДАМП СИГНАЛ</b> {emoji}
+    return f"""{emoji} <b>ПАМП/ДАМП СИГНАЛ (5min)</b> {emoji}
 
 {color} <b>{ticker}</b> | {direction}
-📊 Изменение: <b>{change:+.1f}%</b> за 15мин
+📊 Изменение: <b>{change:+.1f}%</b> за 5мин
 📈 Объем: <b>Z={volume_z:.1f}</b>
 💪 Сила: <b>{signal['strength']}</b>
 
@@ -184,8 +184,8 @@ def format_signal_message(signal: Dict) -> str:
 # ========================= ОСНОВНОЙ ЦИКЛ =========================
 
 def main():
-    print("🚀 ЗАПУСК СКАНЕРА ПАМПОВ/ДАМПОВ - 15 МИНУТ")
-    print(f"🔍 Отслеживание движений от {PRICE_CHANGE_THRESHOLD}% за 15 минут")
+    print("🚀 ЗАПУСК СКАНЕРА ПАМПОВ/ДАМПОВ - 5 МИНУТ")
+    print(f"🔍 Отслеживание движений от {PRICE_CHANGE_THRESHOLD}% за 5 минут")
     
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Укажи TELEGRAM_BOT_TOKEN!")
@@ -212,13 +212,13 @@ def main():
 
     total_symbols = len(symbols)
     print(f"🔍 Найдено монет: {total_symbols}")
-    send_telegram(f"🤖 Сканер пампов/дампов запущен | Монет: {total_symbols}")
+    send_telegram(f"🤖 Сканер пампов/дампов запущен | 5min ТФ | Монет: {total_symbols}")
 
     signal_count = 0
 
     while True:
         try:
-            print(f"\n⏱️ Сканирование 15min свечей... | Сигналов: {signal_count}")
+            print(f"\n⏱️ Сканирование 5min свечей... | Сигналов: {signal_count}")
             current_time = time.time()
 
             for symbol in symbols:
@@ -228,7 +228,8 @@ def main():
                         if time_since_last_signal < SIGNAL_COOLDOWN_MIN * 60:
                             continue
 
-                    ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=20)
+                    # Используем 5-минутный таймфрейм
+                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=25)
                     if not ohlcv or len(ohlcv) < 5:
                         continue
 
